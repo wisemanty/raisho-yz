@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SKILL_NAME="raisho-yz"
+DEFAULT_PACKAGE_DIR="/Users/wisemantong/Desktop/有赞后台分析/skill打包"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+
+version() {
+  awk '/^## .* v[0-9]+\.[0-9]+\.[0-9]+/ {print $NF; exit}' "$SKILL_DIR/CHANGELOG.md"
+}
+
+usage() {
+  cat <<'EOF'
+raisho-yz - 来处有赞经营分析 skill 管理命令
+
+Usage:
+  raisho-yz version
+  raisho-yz validate
+  raisho-yz package [output_dir]
+  raisho-yz update
+  raisho-yz run weekly --week-label YYYY-WW --detail /path/to/detail.xlsx
+  raisho-yz run distributor --week-label YYYY-WW --detail /path/to/detail.xlsx --distributor Jeff
+  raisho-yz run backend-audit --week-label YYYY-WW --date-range "YYYY-MM-DD 至 YYYY-MM-DD"
+
+Notes:
+  update 会在当前 skill 仓库里执行 git pull，然后校验 skill。
+  package 会生成 raisho-yz-vX.Y.Z.zip 和 raisho-yz-latest.zip。
+EOF
+}
+
+validate() {
+  local validator="$HOME/.codex/skills/.system/skill-creator/scripts/quick_validate.py"
+  if [[ -f "$validator" ]]; then
+    "$PYTHON_BIN" "$validator" "$SKILL_DIR"
+  else
+    test -f "$SKILL_DIR/SKILL.md"
+    test -f "$SKILL_DIR/README.md"
+    test -f "$SKILL_DIR/CHANGELOG.md"
+    echo "Basic validation passed. quick_validate.py was not found."
+  fi
+}
+
+package_skill() {
+  local output_dir="${1:-$DEFAULT_PACKAGE_DIR}"
+  local ver
+  local tmp_dir
+  ver="$(version)"
+  tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' RETURN
+  mkdir -p "$output_dir"
+  rm -f "$output_dir/$SKILL_NAME-$ver.zip" "$output_dir/$SKILL_NAME-latest.zip"
+  (
+    mkdir -p "$tmp_dir/$SKILL_NAME"
+    tar \
+      --exclude='.git' \
+      --exclude='__pycache__' \
+      --exclude='*.pyc' \
+      --exclude='*.pyo' \
+      --exclude='*.xlsx' \
+      --exclude='*.csv' \
+      --exclude='*.zip' \
+      --exclude='*.log' \
+      -cf - -C "$SKILL_DIR" . | tar -xf - -C "$tmp_dir/$SKILL_NAME"
+    cd "$tmp_dir"
+    zip -r "$output_dir/$SKILL_NAME-$ver.zip" "$SKILL_NAME" \
+      -x '*/__pycache__/*' '*.pyc' '*.pyo' '*/.git/*' '*.xlsx' '*.csv' '*.zip' '*.log'
+  )
+  cp "$output_dir/$SKILL_NAME-$ver.zip" "$output_dir/$SKILL_NAME-latest.zip"
+  echo "$output_dir/$SKILL_NAME-$ver.zip"
+  echo "$output_dir/$SKILL_NAME-latest.zip"
+}
+
+update_skill() {
+  (
+    cd "$SKILL_DIR"
+    git pull --ff-only
+  )
+  validate
+  package_skill "$DEFAULT_PACKAGE_DIR"
+  echo "Updated $SKILL_NAME to $(version)"
+}
+
+run_analysis() {
+  local mode="${1:-}"
+  shift || true
+  case "$mode" in
+    weekly)
+      "$PYTHON_BIN" "$SKILL_DIR/scripts/run_analysis.py" --mode weekly "$@"
+      ;;
+    distributor)
+      "$PYTHON_BIN" "$SKILL_DIR/scripts/run_analysis.py" --mode distributor "$@"
+      ;;
+    backend-audit)
+      "$PYTHON_BIN" "$SKILL_DIR/scripts/run_analysis.py" --mode backend-audit "$@"
+      ;;
+    *)
+      echo "Unknown run mode: ${mode:-<empty>}" >&2
+      usage
+      exit 2
+      ;;
+  esac
+}
+
+cmd="${1:-help}"
+shift || true
+
+case "$cmd" in
+  version)
+    version
+    ;;
+  validate)
+    validate
+    ;;
+  package)
+    package_skill "${1:-$DEFAULT_PACKAGE_DIR}"
+    ;;
+  update)
+    update_skill
+    ;;
+  run)
+    run_analysis "$@"
+    ;;
+  help|--help|-h)
+    usage
+    ;;
+  *)
+    echo "Unknown command: $cmd" >&2
+    usage
+    exit 2
+    ;;
+esac

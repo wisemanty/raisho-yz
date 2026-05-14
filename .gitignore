@@ -1,0 +1,26 @@
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+node_modules/
+
+# Local generated outputs and downloaded business data should not be committed.
+周报/
+原始数据/
+巡检证据/
+*.xlsx
+*.xls
+*.csv
+*.zip
+*.log
+
+# Secrets or local auth material.
+.env
+.env.*
+cookies*
+tokens*
+secrets*

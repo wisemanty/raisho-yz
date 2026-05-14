@@ -1,0 +1,4 @@
+interface:
+  display_name: "来处有赞周度分析"
+  short_description: "每周巡检有赞后台、自动取数，生成来处经营四张表和老板视角总结。"
+  default_prompt: "跑本周有赞分析：完整巡检后台、自动获取 yz_open_id 明细，按数据 -> 用户 -> 行为 -> 信任 -> 动作输出四张表和周度总结。"
