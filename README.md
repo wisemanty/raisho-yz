@@ -155,7 +155,7 @@ raisho-yz run backend-audit \
 推荐把 GitHub 仓库克隆到 Codex skills 目录：
 
 ```bash
-git clone git@github.com:wisemanty/raisho-yz.git ~/.codex/skills/raisho-yz
+git clone https://github.com/wisemanty/raisho-yz.git ~/.codex/skills/raisho-yz
 ```
 
 把命令加入 PATH：
