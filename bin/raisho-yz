@@ -54,7 +54,6 @@ package_skill() {
   local tmp_dir
   ver="$(version)"
   tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' RETURN
   mkdir -p "$output_dir"
   rm -f "$output_dir/$SKILL_NAME-$ver.zip" "$output_dir/$SKILL_NAME-latest.zip"
   (
@@ -73,6 +72,7 @@ package_skill() {
     zip -r "$output_dir/$SKILL_NAME-$ver.zip" "$SKILL_NAME" \
       -x '*/__pycache__/*' '*.pyc' '*.pyo' '*/.git/*' '*.xlsx' '*.csv' '*.zip' '*.log'
   )
+  rm -rf "$tmp_dir"
   cp "$output_dir/$SKILL_NAME-$ver.zip" "$output_dir/$SKILL_NAME-latest.zip"
   echo "$output_dir/$SKILL_NAME-$ver.zip"
   echo "$output_dir/$SKILL_NAME-latest.zip"
