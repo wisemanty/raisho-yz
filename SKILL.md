@@ -23,6 +23,8 @@ The stable weekly deliverables are:
 - `02商品路径表`
 - `03分销员质量表`
 - `04经营动作表`
+- `经营分析总结_<week>.md`
+- `经营分析总结_<week>.docx`
 
 For a full weekly operation review, also produce or update:
 
@@ -108,6 +110,7 @@ The owner decides business principles. The agent adjusts operating thresholds fr
    - Use `scripts/build_weekly_tables.py` when a core export file is available.
    - The script should auto-calibrate operating rules from the current export. Do not edit code just to change weekly amount thresholds.
    - For a date-range analysis, prefer `scripts/run_analysis.py --mode weekly --start YYYY-MM-DD --end YYYY-MM-DD`; it creates a filtered detail file before building the workbook.
+   - Weekly mode must also generate a Markdown and Word operating summary through `scripts/build_operating_summary.py`.
    - Use the bundled Python runtime if normal `python3` lacks spreadsheet libraries:
      `/Users/wisemantong/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3`
 

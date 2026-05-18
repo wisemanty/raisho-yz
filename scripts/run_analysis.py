@@ -16,6 +16,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from build_distributor_report import build_distributor_report  # noqa: E402
 from build_weekly_tables import build_tables, find_col, read_table  # noqa: E402
+from build_operating_summary import build_summary  # noqa: E402
 from create_audit_note import build_note  # noqa: E402
 from create_backend_audit_report import build_report  # noqa: E402
 
@@ -108,7 +109,8 @@ def main() -> None:
             week_dir, args.week_label, args.date_range, args.overwrite_audit_note
         )
         workbook = build_tables(detail_path, week_dir, args.week_label, audit_note)
-        outputs.extend([audit_note, workbook])
+        summary_md, summary_docx = build_summary(workbook, week_dir, args.week_label, detail_path, args.date_range)
+        outputs.extend([audit_note, workbook, summary_md, summary_docx])
         if log_lines:
             outputs.append(detail_path)
 

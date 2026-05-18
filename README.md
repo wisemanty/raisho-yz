@@ -21,6 +21,8 @@ GitHub 仓库建议名：`raisho-yz`
 输出文件：
 
 - `来处有赞周度四张表_<week>.xlsx`
+- `经营分析总结_<week>.md`
+- `经营分析总结_<week>.docx`
 
 核心工作表：
 

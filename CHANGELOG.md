@@ -2,6 +2,34 @@
 
 本文件记录 `raisho-youzan-weekly-analysis` skill 的关键版本变化，方便 OpenClaw 测试、交接和后续每周固定运行。
 
+## 2026-05-18 v0.8.0
+
+### 新增
+
+- 周度经营分析新增 Word 版总结：
+  - `经营分析总结_<week>.md`
+  - `经营分析总结_<week>.docx`
+- 新增脚本：
+  - `scripts/build_operating_summary.py`
+- `raisho-yz run weekly` 现在会在生成四张表后，自动读取 workbook 和区间明细，生成 Markdown + Word 两份经营分析总结。
+
+### 总结内容
+
+- 数据口径
+- 一句话判断
+- 商品结构
+- 用户结构
+- 重点用户
+- 商品路径
+- 分销员表现
+- 已成立/未成立的经营判断
+- 本周经营动作
+- 下周验证点
+
+### 目的
+
+- 以后经营分析不仅保留机器可读的 Excel 和 Markdown，也能直接交付一份适合汇报、转发和存档的 Word 文件。
+
 ## 2026-05-18 v0.7.0
 
 ### 效率优化
