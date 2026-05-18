@@ -133,6 +133,18 @@ raisho-yz run weekly \
   --detail "/path/to/来处订单商品明细_yz_open_id.xlsx"
 ```
 
+如果要分析指定日期区间：
+
+```bash
+raisho-yz run weekly \
+  --week-label "2026-05-10_to_2026-05-18" \
+  --detail "/path/to/来处订单商品明细_yz_open_id.xlsx" \
+  --start 2026-05-10 \
+  --end 2026-05-18
+```
+
+脚本会先从全量明细生成区间明细，再用区间明细生成四张表。
+
 ## 运行单经销商分析
 
 ```bash
@@ -179,6 +191,12 @@ raisho-yz package
 raisho-yz update
 ```
 
+`raisho-yz` 默认优先使用 Codex bundled Python，避免系统 Python 缺少 pandas/openpyxl。需要指定 Python 时可以：
+
+```bash
+PYTHON_BIN=/path/to/python raisho-yz run weekly ...
+```
+
 ## v0.5.0 之后的判断方式
 
 这个 skill 不要求老板每周手动调整阈值。
@@ -213,6 +231,7 @@ agent 每次会根据当周数据自动校准：
 - `06/07数据质量检查` 里是否缺少 `yz_open_id`
 - 原始数据是否为最新导出
 - 分销员名字是否发生变化
+- 分销员统计目前是否只按昵称聚合；如果要解决改名/重名，要补充分销员 ID 或手机号导出
 - 订单状态是否包含未支付、取消、退款
 - 有赞导出的 `.csv` 是否其实是 XLSX 文件
 - WorkBuddy/OpenClaw 是否使用了最新版本包

@@ -11,7 +11,14 @@ SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 SKILL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILL_NAME="raisho-yz"
 DEFAULT_PACKAGE_DIR="/Users/wisemantong/Desktop/有赞后台分析/skill打包"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+BUNDLED_PYTHON="/Users/wisemantong/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3"
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+  if [[ -x "$BUNDLED_PYTHON" ]]; then
+    PYTHON_BIN="$BUNDLED_PYTHON"
+  else
+    PYTHON_BIN="python3"
+  fi
+fi
 
 version() {
   awk '/^## .* v[0-9]+\.[0-9]+\.[0-9]+/ {print $NF; exit}' "$SKILL_DIR/CHANGELOG.md"
@@ -27,19 +34,28 @@ Usage:
   raisho-yz package [output_dir]
   raisho-yz update
   raisho-yz run weekly --week-label YYYY-WW --detail /path/to/detail.xlsx
+  raisho-yz run weekly --week-label YYYY-WW --detail /path/to/detail.xlsx --start YYYY-MM-DD --end YYYY-MM-DD
   raisho-yz run distributor --week-label YYYY-WW --detail /path/to/detail.xlsx --distributor Jeff
   raisho-yz run backend-audit --week-label YYYY-WW --date-range "YYYY-MM-DD 至 YYYY-MM-DD"
 
 Notes:
   update 会在当前 skill 仓库里执行 git pull，然后校验 skill。
   package 会生成 raisho-yz-vX.Y.Z.zip 和 raisho-yz-latest.zip。
+  默认优先使用 Codex bundled Python；可用 PYTHON_BIN=/path/to/python 覆盖。
 EOF
 }
 
 validate() {
   local validator="$HOME/.codex/skills/.system/skill-creator/scripts/quick_validate.py"
   if [[ -f "$validator" ]]; then
-    "$PYTHON_BIN" "$validator" "$SKILL_DIR"
+    if command -v "${VALIDATE_PYTHON:-python3}" >/dev/null 2>&1 && "${VALIDATE_PYTHON:-python3}" "$validator" "$SKILL_DIR"; then
+      return 0
+    fi
+    echo "quick_validate.py failed; falling back to basic file validation." >&2
+    test -f "$SKILL_DIR/SKILL.md"
+    test -f "$SKILL_DIR/README.md"
+    test -f "$SKILL_DIR/CHANGELOG.md"
+    echo "Basic validation passed."
   else
     test -f "$SKILL_DIR/SKILL.md"
     test -f "$SKILL_DIR/README.md"

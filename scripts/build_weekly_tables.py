@@ -444,6 +444,7 @@ def build_tables(detail_path: Path, output_dir: Path, week_label: str, audit_not
                 "高客单客户数": high_count,
                 "黑标客户数": black_count,
                 "主要成交品类": join_unique(group["_category"], 10),
+                "分销员口径风险": "按分销员昵称聚合；如分销员改名或重名，需要接入分销员ID/手机号后再合并。",
             })
         distributors = pd.DataFrame(dist_records)
         if not distributors.empty:
@@ -506,6 +507,7 @@ def build_tables(detail_path: Path, output_dir: Path, week_label: str, audit_not
         {"检查项": "使用金额字段", "结果": amount_col},
         {"检查项": "使用订单金额字段", "结果": order_amount_col},
         {"检查项": "分销员字段", "结果": distributor_col or "缺失"},
+        {"检查项": "分销员聚合口径", "结果": "当前按分销员昵称字段聚合；买家客户按yz_open_id去重。若要避免分销员改名/重名，需要补充分销员ID或手机号导出。"},
         {"检查项": "状态字段", "结果": status_col or "缺失"},
     ])
 
@@ -515,6 +517,7 @@ def build_tables(detail_path: Path, output_dir: Path, week_label: str, audit_not
         pd.DataFrame([
             {"项目": "周度", "说明": week_label},
             {"项目": "主键", "说明": "yz_open_id"},
+            {"项目": "分销员口径", "说明": "当前核心明细只有分销员昵称/团队，分销员质量表按昵称聚合；买家客户数按 yz_open_id 去重。"},
             {"项目": "核心框架", "说明": "数据 -> 用户 -> 行为 -> 信任 -> 动作"},
             {"项目": "规则方式", "说明": "优先级和高客单不再使用固定金额门槛；agent先按当周数据分布自动校准，再叠加商品生命周期、复购、分销信号。"},
             {"项目": "预售事实", "说明": "黑标和今治毛巾为2026-05-10新上预售链接，约2026-05-31到货"},

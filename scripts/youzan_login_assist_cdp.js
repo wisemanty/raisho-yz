@@ -5,6 +5,7 @@ const http = require("http");
 const path = require("path");
 
 const DEFAULT_URL = "https://www.youzan.com/v4/statcenter/custompeek/index";
+const DEFAULT_SHOP_NAME = "RAISHO来处";
 
 function parseArgs(argv) {
   const args = {
@@ -14,6 +15,7 @@ function parseArgs(argv) {
     output: path.join(process.cwd(), "youzan-login.png"),
     code: "",
     selector: "",
+    shopName: DEFAULT_SHOP_NAME,
     waitSeconds: 300,
     pollSeconds: 5,
   };
@@ -26,6 +28,7 @@ function parseArgs(argv) {
     else if (key === "--output") args.output = next, i += 1;
     else if (key === "--code") args.code = next, i += 1;
     else if (key === "--selector") args.selector = next, i += 1;
+    else if (key === "--shop-name") args.shopName = next, i += 1;
     else if (key === "--wait-seconds") args.waitSeconds = Number(next), i += 1;
     else if (key === "--poll-seconds") args.pollSeconds = Number(next), i += 1;
     else if (key === "--help") {
@@ -44,6 +47,7 @@ function printHelp() {
   node youzan_login_assist_cdp.js --mode screenshot --output /tmp/youzan-login.png
   node youzan_login_assist_cdp.js --mode click-send-code
   node youzan_login_assist_cdp.js --mode fill-code --code 123456
+  node youzan_login_assist_cdp.js --mode select-shop --shop-name RAISHO来处
   node youzan_login_assist_cdp.js --mode wait-login --wait-seconds 300
 
 Modes:
@@ -51,6 +55,7 @@ Modes:
   screenshot      Capture the current Youzan/Chrome page for Feishu delivery.
   click-send-code Try to click a visible "send/get verification code" control.
   fill-code       Fill an SMS/login code into the likely verification input.
+  select-shop     If Youzan is on the shop-selection page, enter the target shop.
   wait-login      Poll until login succeeds or timeout.
 
 Prerequisite:
@@ -137,6 +142,20 @@ async function navigate(send, url) {
   await sleep(3000);
 }
 
+async function currentPage(send) {
+  return evaluate(send, `(async()=>({
+    url: location.href,
+    title: document.title,
+    bodyHint: document.body ? document.body.innerText.slice(0, 300).replace(/\\s+/g, " ") : ""
+  }))()`);
+}
+
+async function clickAt(send, x, y) {
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+}
+
 async function loginStatus(send) {
   return evaluate(send, `(async()=>{
     const out = { loggedIn: false, url: location.href, title: document.title, reason: "" };
@@ -157,6 +176,41 @@ async function loginStatus(send) {
     out.bodyHint = document.body ? document.body.innerText.slice(0, 120).replace(/\\s+/g, " ") : "";
     return out;
   })()`);
+}
+
+async function selectShop(send, shopName) {
+  const before = await currentPage(send);
+  if (!before.title.includes("选择店铺") && !before.bodyHint.includes("进入工作台")) {
+    return { selected: false, reason: "not_on_shop_select", page: before };
+  }
+  const target = await evaluate(send, `(()=>{
+    const shopName = ${JSON.stringify(shopName)};
+    const visible = (el) => {
+      const s = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      return s.visibility !== "hidden" && s.display !== "none" && r.width > 0 && r.height > 0;
+    };
+    const containers = [...document.querySelectorAll("div,section,li")]
+      .filter(visible)
+      .filter((el) => (el.innerText || "").includes(shopName) && (el.innerText || "").includes("进入工作台"));
+    const root = containers.sort((a,b) => a.getBoundingClientRect().width - b.getBoundingClientRect().width)[0] || document.body;
+    const buttons = [...root.querySelectorAll("button,a,[role=button],div,span")]
+      .filter(visible)
+      .filter((el) => /进入工作台/.test((el.innerText || el.textContent || "").trim()));
+    const picked = buttons.sort((a,b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return (ar.width * ar.height) - (br.width * br.height);
+    })[0];
+    if (!picked) return { found: false, reason: "workbench_button_not_found", title: document.title, bodyHint: document.body.innerText.slice(0, 200) };
+    const r = picked.getBoundingClientRect();
+    return { found: true, x: r.left + r.width / 2, y: r.top + r.height / 2, text: (picked.innerText || picked.textContent || "").trim(), title: document.title };
+  })()`);
+  if (!target.found) return { selected: false, ...target };
+  await clickAt(send, target.x, target.y);
+  await sleep(5000);
+  const after = await currentPage(send);
+  return { selected: true, shopName, target, page: after };
 }
 
 async function screenshot(send, output) {
@@ -224,6 +278,7 @@ async function waitLogin(send, waitSeconds, pollSeconds) {
   const deadline = Date.now() + waitSeconds * 1000;
   let last = null;
   while (Date.now() < deadline) {
+    await selectShop(send, DEFAULT_SHOP_NAME).catch(() => null);
     last = await loginStatus(send);
     console.log(JSON.stringify({ loggedIn: last.loggedIn, reason: last.reason, url: last.url }));
     if (last.loggedIn) return last;
@@ -250,6 +305,8 @@ async function main() {
     } else if (args.mode === "fill-code") {
       if (!args.code) throw new Error("--code is required for fill-code mode.");
       console.log(JSON.stringify(await fillCode(send, args.code, args.selector), null, 2));
+    } else if (args.mode === "select-shop") {
+      console.log(JSON.stringify(await selectShop(send, args.shopName), null, 2));
     } else if (args.mode === "wait-login") {
       console.log(JSON.stringify(await waitLogin(send, args.waitSeconds, args.pollSeconds), null, 2));
     } else {

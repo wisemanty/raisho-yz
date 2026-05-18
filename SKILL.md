@@ -107,6 +107,7 @@ The owner decides business principles. The agent adjusts operating thresholds fr
 6. Generate the workbook.
    - Use `scripts/build_weekly_tables.py` when a core export file is available.
    - The script should auto-calibrate operating rules from the current export. Do not edit code just to change weekly amount thresholds.
+   - For a date-range analysis, prefer `scripts/run_analysis.py --mode weekly --start YYYY-MM-DD --end YYYY-MM-DD`; it creates a filtered detail file before building the workbook.
    - Use the bundled Python runtime if normal `python3` lacks spreadsheet libraries:
      `/Users/wisemantong/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3`
 
@@ -214,6 +215,8 @@ node /Users/wisemantong/.codex/skills/raisho-youzan-weekly-analysis/scripts/fetc
   --output-dir "/Users/wisemantong/Desktop/有赞后台分析/周报/2026-W20/原始数据" \
   --report-name "来处订单商品明细_yz_open_id"
 ```
+
+If Youzan stops at the shop-selection page after login, the CDP fetch script should auto-select `RAISHO来处` by default. Override with `--shop-name` when needed.
 
 Prerequisite:
 

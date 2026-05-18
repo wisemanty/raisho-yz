@@ -6,6 +6,7 @@ const https = require("https");
 const path = require("path");
 
 const DEFAULT_REPORT_NAME = "来处订单商品明细_yz_open_id";
+const DEFAULT_SHOP_NAME = "RAISHO来处";
 
 function parseArgs(argv) {
   const args = {
@@ -13,6 +14,8 @@ function parseArgs(argv) {
     reportName: DEFAULT_REPORT_NAME,
     reportId: "",
     outputDir: process.cwd(),
+    shopName: DEFAULT_SHOP_NAME,
+    autoSelectShop: true,
     reExport: true,
     waitSeconds: 900,
     pollSeconds: 10,
@@ -25,8 +28,10 @@ function parseArgs(argv) {
     else if (key === "--report-name") args.reportName = next, i += 1;
     else if (key === "--report-id") args.reportId = next, i += 1;
     else if (key === "--output-dir") args.outputDir = next, i += 1;
+    else if (key === "--shop-name") args.shopName = next, i += 1;
     else if (key === "--wait-seconds") args.waitSeconds = Number(next), i += 1;
     else if (key === "--poll-seconds") args.pollSeconds = Number(next), i += 1;
+    else if (key === "--no-auto-select-shop") args.autoSelectShop = false;
     else if (key === "--no-re-export") args.reExport = false;
     else if (key === "--help") {
       printHelp();
@@ -45,7 +50,9 @@ function printHelp() {
     [--report-name "${DEFAULT_REPORT_NAME}"] \\
     [--report-id 436628] \\
     [--cdp http://127.0.0.1:9222] \\
+    [--shop-name "${DEFAULT_SHOP_NAME}"] \\
     [--no-re-export]
+    [--no-auto-select-shop]
 
 Prerequisite:
   Start Chrome with --remote-debugging-port=9222 and log in to Youzan.
@@ -131,6 +138,7 @@ async function connect(cdpBase) {
   };
 
   await new Promise((resolve) => { ws.onopen = resolve; });
+  await send("Page.enable");
   await send("Runtime.enable");
   return { ws, send };
 }
@@ -174,6 +182,71 @@ async function youzanPost(send, url, payload) {
     });
     return await r.json();
   `));
+}
+
+async function currentPage(send) {
+  return evaluate(send, browserExpression(`
+    return {
+      url: location.href,
+      title: document.title,
+      bodyHint: document.body ? document.body.innerText.slice(0, 300).replace(/\\s+/g, " ") : ""
+    };
+  `));
+}
+
+async function clickAt(send, x, y) {
+  await send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "none" });
+  await send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+  await send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+}
+
+async function selectShopIfNeeded(send, shopName) {
+  const before = await currentPage(send);
+  if (!before.title.includes("选择店铺") && !before.bodyHint.includes("进入工作台")) {
+    return { selected: false, reason: "not_on_shop_select", page: before };
+  }
+
+  const target = await evaluate(send, browserExpression(`
+    const shopName = ${JSON.stringify(shopName)};
+    const visible = (el) => {
+      const s = getComputedStyle(el);
+      const r = el.getBoundingClientRect();
+      return s.visibility !== "hidden" && s.display !== "none" && r.width > 0 && r.height > 0;
+    };
+    const containers = [...document.querySelectorAll("div,section,li")]
+      .filter(visible)
+      .filter((el) => (el.innerText || "").includes(shopName) && (el.innerText || "").includes("进入工作台"));
+    const root = containers.sort((a,b) => a.getBoundingClientRect().width - b.getBoundingClientRect().width)[0] || document.body;
+    const buttons = [...root.querySelectorAll("button,a,[role=button],div,span")]
+      .filter(visible)
+      .filter((el) => /进入工作台/.test((el.innerText || el.textContent || "").trim()));
+    const picked = buttons.sort((a,b) => {
+      const ar = a.getBoundingClientRect();
+      const br = b.getBoundingClientRect();
+      return (ar.width * ar.height) - (br.width * br.height);
+    })[0];
+    if (!picked) return { found: false, reason: "workbench_button_not_found", title: document.title, bodyHint: document.body.innerText.slice(0, 200) };
+    const r = picked.getBoundingClientRect();
+    return { found: true, x: r.left + r.width / 2, y: r.top + r.height / 2, text: (picked.innerText || picked.textContent || "").trim(), title: document.title };
+  `));
+  if (!target.found) return { selected: false, ...target };
+
+  await clickAt(send, target.x, target.y);
+  await sleep(5000);
+  const after = await currentPage(send);
+  return { selected: true, target, page: after };
+}
+
+async function ensureCustompeekPage(send, shopName, autoSelectShop) {
+  if (autoSelectShop) {
+    const selection = await selectShopIfNeeded(send, shopName);
+    if (selection.selected) console.log(JSON.stringify({ autoSelectShop: true, shopName, page: selection.page }));
+  }
+  const page = await currentPage(send);
+  if (!page.url.includes("/v4/statcenter/custompeek/index")) {
+    await send("Page.navigate", { url: "https://www.youzan.com/v4/statcenter/custompeek/index" });
+    await sleep(3000);
+  }
 }
 
 async function findReport(send, reportName, reportId) {
@@ -222,6 +295,7 @@ async function main() {
 
   const { ws, send } = await connect(args.cdp);
   try {
+    await ensureCustompeekPage(send, args.shopName, args.autoSelectShop);
     const report = await findReport(send, args.reportName, args.reportId);
     const reportId = String(report.id);
     console.log(JSON.stringify({

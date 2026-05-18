@@ -2,6 +2,42 @@
 
 本文件记录 `raisho-youzan-weekly-analysis` skill 的关键版本变化，方便 OpenClaw 测试、交接和后续每周固定运行。
 
+## 2026-05-18 v0.7.0
+
+### 效率优化
+
+- `raisho-yz` 命令默认优先使用 Codex bundled Python：
+  - `/Users/wisemantong/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3`
+  - 避免系统 `python3` 缺少 `pandas/openpyxl` 时先失败一次。
+- `raisho-yz run weekly` 支持日期过滤参数：
+  - `--start YYYY-MM-DD`
+  - `--end YYYY-MM-DD`
+  - 脚本会先从全量明细生成区间明细，再用区间明细跑四张表。
+- CDP 自动取数脚本支持登录后的自动选店：
+  - 默认识别 `RAISHO来处`
+  - 自动点击 `进入工作台`
+  - 可用 `--shop-name` 覆盖，可用 `--no-auto-select-shop` 关闭。
+- 登录辅助脚本新增：
+  - `--mode select-shop`
+  - `wait-login` 轮询时会尝试自动进入默认店铺。
+
+### 口径强化
+
+- 四张表和单经销商报告新增分销员口径提示：
+  - 买家客户按 `yz_open_id` 去重。
+  - 分销员当前按昵称字段聚合/筛选。
+  - 若要避免分销员改名或重名，后续需要接入分销员 ID / 手机号导出。
+
+### 推荐用法
+
+```bash
+raisho-yz run weekly \
+  --week-label "2026-05-10_to_2026-05-18" \
+  --detail "/path/to/来处订单商品明细_yz_open_id.xlsx" \
+  --start 2026-05-10 \
+  --end 2026-05-18
+```
+
 ## 2026-05-14 v0.6.0
 
 ### 命名

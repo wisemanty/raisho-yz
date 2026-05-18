@@ -84,6 +84,7 @@ def build_distributor_report(
             {"检查项": "匹配方式", "结果": "精确匹配" if exact else "包含匹配"},
             {"检查项": "匹配结果", "结果": "无匹配数据"},
             {"检查项": "分销员字段", "结果": distributor_col},
+            {"检查项": "分销员聚合口径", "结果": "当前按分销员昵称字段筛选；买家客户按yz_open_id去重。若要避免分销员改名/重名，需要补充分销员ID或手机号导出。"},
         ])
         with pd.ExcelWriter(out, engine="openpyxl") as writer:
             checks.to_excel(writer, sheet_name="00口径说明", index=False)
@@ -225,6 +226,7 @@ def build_distributor_report(
         {"指标": "判断原因", "结果": quality_reason},
         {"指标": "培养动作", "结果": cultivation_action},
         {"指标": "规则校准", "结果": customer_rule_profile.get("生成逻辑", "")},
+        {"指标": "分销员口径风险", "结果": "当前按分销员昵称筛选；如分销员改名或重名，需要接入分销员ID/手机号后再合并。"},
     ])
     summary_values = {str(row["指标"]): row["结果"] for row in summary.to_dict("records")}
     text_summary = build_text_summary(distributor_query, week_label, summary_values, customers, product, actions)
@@ -241,6 +243,7 @@ def build_distributor_report(
         {"检查项": "使用金额字段", "结果": amount_col},
         {"检查项": "使用订单金额字段", "结果": order_amount_col},
         {"检查项": "分销员字段", "结果": distributor_col},
+        {"检查项": "分销员聚合口径", "结果": "当前按分销员昵称字段筛选；买家客户按yz_open_id去重。若要避免分销员改名/重名，需要补充分销员ID或手机号导出。"},
         {"检查项": "状态字段", "结果": status_col or "缺失"},
     ])
 
@@ -253,6 +256,7 @@ def build_distributor_report(
             {"项目": "周度", "说明": week_label},
             {"项目": "分析对象", "说明": distributor_query},
             {"项目": "主键", "说明": "买家使用 yz_open_id 合并；分销员使用分销员字段筛选"},
+            {"项目": "分销员口径", "说明": "当前核心明细只有分销员昵称/团队；本报告按昵称筛选，不等同于分销员ID级合并。"},
             {"项目": "核心框架", "说明": "分销员 -> 客户 -> 订单 -> 商品 -> 复购/高客单 -> 动作"},
             {"项目": "规则方式", "说明": "客户优先级按本分销员客户分布自动校准，并输出命中规则、判断原因、置信度和人工复核标记。"},
         ]).to_excel(writer, sheet_name="00口径说明", index=False)
