@@ -147,6 +147,11 @@ def build_summary_text(
             "最新支付时间": "",
             "时间字段": value_from_checks(checks, "使用时间字段", ""),
         }
+    repurchase_note = value_from_checks(
+        checks,
+        "复购统计口径",
+        "复购客户数/复购率按购买会话数计算；同一用户同一自然日多单合并为1次购买会话。",
+    )
 
     p0 = users[users["优先级"].astype(str) == "P0"] if "优先级" in users.columns else pd.DataFrame()
     p1 = users[users["优先级"].astype(str) == "P1"] if "优先级" in users.columns else pd.DataFrame()
@@ -176,6 +181,7 @@ def build_summary_text(
 - 有效明细行数：{metrics.get('有效明细行数', 0)}
 - 去重用户数：{metrics.get('去重用户数', 0)}
 - 有效订单数：{metrics.get('有效订单数', 0)}
+- 复购统计口径：{repurchase_note}
 - 累计实付：{format_money(metrics.get('累计实付', 0))}
 - 客单价：{format_money(metrics.get('客单价', 0))}
 
@@ -237,6 +243,7 @@ def build_summary_text(
         "distributors": distributors,
         "product": product,
         "metrics": metrics,
+        "复购统计口径": repurchase_note,
     }
     return md, context
 
@@ -279,6 +286,7 @@ def build_docx(
     styles["Heading 2"].font.size = Pt(12.5)
 
     metrics = context["metrics"]
+    repurchase_note = context.get("复购统计口径", "同一用户同一自然日多单合并为1次购买会话。")
     product = context["product"]
     users = context["users"]
     paths = context["paths"]
@@ -305,6 +313,7 @@ def build_docx(
     doc.add_heading("数据口径", level=1)
     for label in ["时间字段", "最早支付时间", "最新支付时间", "原始明细行数", "有效明细行数", "去重用户数", "有效订单数"]:
         doc.add_paragraph(f"{label}：{metrics.get(label, '')}", style=None)
+    doc.add_paragraph(f"复购统计口径：{repurchase_note}", style=None)
 
     doc.add_heading("商品结构", level=1)
     add_dataframe_table(doc, product, ["品类", "客户数", "订单数", "件数", "商品实收"])

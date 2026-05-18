@@ -46,6 +46,13 @@ Use `yz_open_id` as the user primary key. Nickname and phone are display fields 
 
 If the core order-item detail file does not contain `yz_open_id`, stop before final analysis and report that the data口径 is insufficient. Do not pretend nickname + phone is a final user identity.
 
+Repurchase count and repurchase rate must use purchase sessions, not raw same-day order count:
+
+- Same `yz_open_id` + same natural purchase date = 1 purchase session.
+- `复购客户数` = customers with purchase sessions >= 2.
+- `复购率` = `复购客户数 / 去重客户数`.
+- Record this reason in outputs: current product specs can cause same-day split orders, and black-label/Imabari presale additions before arrival should not be counted as post-experience repurchase.
+
 ## Dynamic Judgment Rule
 
 Do not ask the owner to manually tune weekly thresholds such as P0 amount, high-AOV amount, or key distributor amount.
@@ -127,6 +134,7 @@ Example:
 
 7. Review outputs before presenting them.
    - Check `06数据质量检查`.
+   - Confirm the workbook states the repurchase metric rule: same user same natural day = 1 purchase session.
    - Open the workbook if possible and verify column widths, filters, frozen headers, and readable action text.
    - If exact values look suspicious, inspect the raw rows rather than smoothing over the issue.
 

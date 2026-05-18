@@ -32,6 +32,22 @@ Keep rows such as:
 
 If status semantics are unclear, keep rows and flag the ambiguity in `06数据质量检查`.
 
+## Repurchase Metric Rule
+
+Use purchase sessions for repurchase counts and rates.
+
+- Purchase session key: same `yz_open_id` + same natural purchase date.
+- Same user, same day, multiple effective orders = 1 purchase session.
+- `复购客户数`: customers with purchase sessions >= 2.
+- `复购率`: `复购客户数 / 去重客户数`.
+
+Reason:
+
+- Current sake options may be limited to 1-bottle and 2-bottle choices, so same-day split orders can simply mean quantity replenishment.
+- Black-label and Imabari towel/bath towel were new presale links on 2026-05-10, with expected arrival around 2026-05-31. Same-day presale additions should not be treated as post-experience repurchase.
+
+Only repurchase count/rate metrics must use this stricter session rule. Other operating signals can still show effective order count as context, as long as the workbook explains the difference.
+
 ## User Layering
 
 Assign tag-style layers, not only one exclusive segment.
@@ -39,7 +55,7 @@ Assign tag-style layers, not only one exclusive segment.
 Suggested layers:
 
 - `尝鲜用户`: 1 effective order and not high-AOV.
-- `复购用户`: 2+ effective orders.
+- `复购用户`: 2+ effective orders as an operating signal. For official repurchase count/rate, use the purchase-session rule above.
 - `高客单用户`: agent-calibrated high value signal based on the current run's AOV/cumulative paid distribution. Do not use a permanent fixed amount as the only criterion.
 - `黑标潜力用户`: bought black label, or bought sake with relatively strong AOV/cumulative paid signal but no black label yet.
 - `分销潜力用户`: has distributor relationship, repeated purchases, or visible sharing/distribution behavior.
@@ -98,6 +114,7 @@ Metrics:
 
 Interpretation:
 
+- Repeat customers and repeat rate must use purchase sessions, not raw same-day order count.
 - A distributor with few customers but high AOV can be valuable.
 - A distributor with sharing/browsing but no paid orders is a content or trust-nurture candidate.
 - A distributor with registered status but no customer/order signal is inactive until proven otherwise.

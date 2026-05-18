@@ -332,6 +332,13 @@ def build_tables(detail_path: Path, output_dir: Path, week_label: str, audit_not
         )
         .reset_index()
     )
+    order_rows["购买日期"] = pd.to_datetime(order_rows["订单时间"], errors="coerce").dt.date
+    session_counts = (
+        order_rows.dropna(subset=["购买日期"])
+        .groupby("_uid")["购买日期"]
+        .nunique()
+        .to_dict()
+    )
 
     user_records = []
     for uid, group in eff.sort_values("_time").groupby("_uid"):
@@ -339,6 +346,7 @@ def build_tables(detail_path: Path, output_dir: Path, week_label: str, audit_not
         categories = user_orders["品类"].tolist()
         paid = float(user_orders["订单实付"].sum())
         order_count = int(user_orders["_order"].nunique())
+        purchase_sessions = int(session_counts.get(uid, order_count))
         aov = paid / order_count if order_count else 0
         rec = {
             "yz_open_id": uid,
@@ -346,6 +354,7 @@ def build_tables(detail_path: Path, output_dir: Path, week_label: str, audit_not
             "历史昵称": join_unique(group[nickname_col]) if nickname_col else "",
             "脱敏手机号": latest_nonempty(group, phone_col),
             "有效订单数": order_count,
+            "购买会话数": purchase_sessions,
             "累计实付": round(paid, 2),
             "客单价": round(aov, 2),
             "首单时间": user_orders["订单时间"].min(),
@@ -430,7 +439,7 @@ def build_tables(detail_path: Path, output_dir: Path, week_label: str, audit_not
             customer_count = int(group["_uid"].nunique())
             order_count = int(order_subset["_order"].nunique())
             paid = float(order_subset["订单实付"].sum())
-            repeat_count = int((related_users["有效订单数"] >= 2).sum())
+            repeat_count = int((related_users["购买会话数"] >= 2).sum()) if "购买会话数" in related_users.columns else int((related_users["有效订单数"] >= 2).sum())
             high_count = int(related_users["用户标签"].astype(str).str.contains("高客单用户", na=False).sum())
             black_count = int(related_users["购买品类"].astype(str).str.contains("玉乃光黑标", na=False).sum())
             dist_records.append({
@@ -441,6 +450,7 @@ def build_tables(detail_path: Path, output_dir: Path, week_label: str, audit_not
                 "客单价": round(paid / order_count, 2) if order_count else 0,
                 "复购客户数": repeat_count,
                 "复购率": f"{repeat_count / customer_count:.1%}" if customer_count else "0.0%",
+                "复购口径": "按购买会话数统计；同一用户同一自然日多单合并为1次购买会话。",
                 "高客单客户数": high_count,
                 "黑标客户数": black_count,
                 "主要成交品类": join_unique(group["_category"], 10),
@@ -508,6 +518,7 @@ def build_tables(detail_path: Path, output_dir: Path, week_label: str, audit_not
         {"检查项": "使用订单金额字段", "结果": order_amount_col},
         {"检查项": "分销员字段", "结果": distributor_col or "缺失"},
         {"检查项": "分销员聚合口径", "结果": "当前按分销员昵称字段聚合；买家客户按yz_open_id去重。若要避免分销员改名/重名，需要补充分销员ID或手机号导出。"},
+        {"检查项": "复购统计口径", "结果": "复购客户数/复购率按购买会话数计算；同一用户同一自然日内多次下单合并为1次购买会话，避免规格限制或预售期补量造成复购虚高。"},
         {"检查项": "状态字段", "结果": status_col or "缺失"},
     ])
 
@@ -518,6 +529,7 @@ def build_tables(detail_path: Path, output_dir: Path, week_label: str, audit_not
             {"项目": "周度", "说明": week_label},
             {"项目": "主键", "说明": "yz_open_id"},
             {"项目": "分销员口径", "说明": "当前核心明细只有分销员昵称/团队，分销员质量表按昵称聚合；买家客户数按 yz_open_id 去重。"},
+            {"项目": "复购口径", "说明": "复购客户数/复购率按购买会话数计算：同一用户同一自然日内多单合并为1次购买会话，避免当天补量或预售期追加被误算为复购。"},
             {"项目": "核心框架", "说明": "数据 -> 用户 -> 行为 -> 信任 -> 动作"},
             {"项目": "规则方式", "说明": "优先级和高客单不再使用固定金额门槛；agent先按当周数据分布自动校准，再叠加商品生命周期、复购、分销信号。"},
             {"项目": "预售事实", "说明": "黑标和今治毛巾为2026-05-10新上预售链接，约2026-05-31到货"},

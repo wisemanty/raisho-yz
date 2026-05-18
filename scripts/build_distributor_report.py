@@ -132,12 +132,20 @@ def build_distributor_report(
         )
         .reset_index()
     )
+    order_rows["购买日期"] = pd.to_datetime(order_rows["订单时间"], errors="coerce").dt.date
+    session_counts = (
+        order_rows.dropna(subset=["购买日期"])
+        .groupby("_uid")["购买日期"]
+        .nunique()
+        .to_dict()
+    )
 
     customer_records = []
     for uid, group in eff.sort_values("_time").groupby("_uid"):
         user_orders = order_rows[order_rows["_uid"] == uid].sort_values("订单时间")
         paid = float(user_orders["订单实付"].sum())
         order_count = int(user_orders["_order"].nunique())
+        purchase_sessions = int(session_counts.get(uid, order_count))
         categories = join_unique(group["_category"], 20)
         customer_records.append({
             "yz_open_id": uid,
@@ -145,6 +153,7 @@ def build_distributor_report(
             "历史昵称": join_unique(group[nickname_col]) if nickname_col else "",
             "脱敏手机号": latest_nonempty(group, phone_col),
             "有效订单数": order_count,
+            "购买会话数": purchase_sessions,
             "累计实付": round(paid, 2),
             "客单价": round(paid / order_count, 2) if order_count else 0,
             "首单时间": user_orders["订单时间"].min(),
@@ -195,7 +204,7 @@ def build_distributor_report(
     customer_count = int(eff["_uid"].nunique())
     order_count = int(order_rows["_order"].nunique()) if not order_rows.empty else 0
     paid = float(order_rows["订单实付"].sum()) if not order_rows.empty else 0
-    repeat_count = int((customers["有效订单数"] >= 2).sum()) if not customers.empty else 0
+    repeat_count = int((customers["购买会话数"] >= 2).sum()) if not customers.empty and "购买会话数" in customers.columns else 0
     high_count = int(customers["用户标签"].astype(str).str.contains("高客单用户", na=False).sum()) if not customers.empty else 0
     black_count = int(customers["购买品类"].astype(str).str.contains("玉乃光黑标", na=False).sum()) if not customers.empty else 0
     quality_judgement = distributor_judgement(customer_count, paid, repeat_count, black_count, high_count)
@@ -219,6 +228,7 @@ def build_distributor_report(
         {"指标": "客单价", "结果": round(paid / order_count, 2) if order_count else 0},
         {"指标": "复购客户数", "结果": repeat_count},
         {"指标": "复购率", "结果": f"{repeat_count / customer_count:.1%}" if customer_count else "0.0%"},
+        {"指标": "复购口径", "结果": "按购买会话数统计；同一用户同一自然日多单合并为1次购买会话。"},
         {"指标": "高客单客户数", "结果": high_count},
         {"指标": "黑标客户数", "结果": black_count},
         {"指标": "主要成交品类", "结果": join_unique(eff["_category"], 10)},
@@ -244,6 +254,7 @@ def build_distributor_report(
         {"检查项": "使用订单金额字段", "结果": order_amount_col},
         {"检查项": "分销员字段", "结果": distributor_col},
         {"检查项": "分销员聚合口径", "结果": "当前按分销员昵称字段筛选；买家客户按yz_open_id去重。若要避免分销员改名/重名，需要补充分销员ID或手机号导出。"},
+        {"检查项": "复购统计口径", "结果": "复购客户数/复购率按购买会话数计算；同一用户同一自然日内多次下单合并为1次购买会话，避免规格限制或预售期补量造成复购虚高。"},
         {"检查项": "状态字段", "结果": status_col or "缺失"},
     ])
 
@@ -257,6 +268,7 @@ def build_distributor_report(
             {"项目": "分析对象", "说明": distributor_query},
             {"项目": "主键", "说明": "买家使用 yz_open_id 合并；分销员使用分销员字段筛选"},
             {"项目": "分销员口径", "说明": "当前核心明细只有分销员昵称/团队；本报告按昵称筛选，不等同于分销员ID级合并。"},
+            {"项目": "复购口径", "说明": "复购客户数/复购率按购买会话数计算：同一用户同一自然日内多单合并为1次购买会话。"},
             {"项目": "核心框架", "说明": "分销员 -> 客户 -> 订单 -> 商品 -> 复购/高客单 -> 动作"},
             {"项目": "规则方式", "说明": "客户优先级按本分销员客户分布自动校准，并输出命中规则、判断原因、置信度和人工复核标记。"},
         ]).to_excel(writer, sheet_name="00口径说明", index=False)
