@@ -99,7 +99,8 @@ def main() -> None:
     if args.mode == "weekly":
         if not args.detail:
             raise SystemExit("--detail is required for weekly mode")
-        detail_path = Path(args.detail).expanduser()
+        original_detail_path = Path(args.detail).expanduser()
+        detail_path = original_detail_path
         log_lines = []
         if args.start or args.end:
             if not args.start or not args.end:
@@ -109,7 +110,14 @@ def main() -> None:
             week_dir, args.week_label, args.date_range, args.overwrite_audit_note
         )
         workbook = build_tables(detail_path, week_dir, args.week_label, audit_note)
-        summary_md, summary_docx = build_summary(workbook, week_dir, args.week_label, detail_path, args.date_range)
+        summary_md, summary_docx = build_summary(
+            workbook,
+            week_dir,
+            args.week_label,
+            detail_path,
+            args.date_range,
+            original_detail_path,
+        )
         outputs.extend([audit_note, workbook, summary_md, summary_docx])
         if log_lines:
             outputs.append(detail_path)

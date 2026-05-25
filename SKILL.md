@@ -19,12 +19,22 @@ Always output around this logic:
 
 The stable weekly deliverables are:
 
-- `01用户分层表`
-- `02商品路径表`
-- `03分销员质量表`
-- `04经营动作表`
 - `经营分析总结_<week>.md`
 - `经营分析总结_<week>.docx`
+- `来处有赞周度四张表_<week>.xlsx` as supporting data
+
+The Word summary is the main weekly meeting artifact. It must follow the meeting outline:
+
+1. 本周一句话结论
+2. 核心数据看板
+3. 本周变化
+4. 商品经营判断
+5. 客户经营池
+6. 分销员排行与经营判断
+7. 本周经营动作复盘
+8. 下周行动清单
+9. 下周要验证的问题
+10. 附录：数据口径
 
 For a full weekly operation review, also produce or update:
 
@@ -117,7 +127,9 @@ The owner decides business principles. The agent adjusts operating thresholds fr
    - Use `scripts/build_weekly_tables.py` when a core export file is available.
    - The script should auto-calibrate operating rules from the current export. Do not edit code just to change weekly amount thresholds.
    - For a date-range analysis, prefer `scripts/run_analysis.py --mode weekly --start YYYY-MM-DD --end YYYY-MM-DD`; it creates a filtered detail file before building the workbook.
-   - Weekly mode must also generate a Markdown and Word operating summary through `scripts/build_operating_summary.py`.
+   - Weekly mode must also generate a Markdown and Word meeting summary through `scripts/build_operating_summary.py`.
+   - Word is the meeting artifact; Excel is the traceable supporting data. Do not rely on `02商品路径表` as the meeting narrative unless the user explicitly asks.
+   - When an unfiltered full detail file is available, pass it through the controller so the summary can compute cumulative metrics, new/old customers, and previous-period comparison.
    - Use the bundled Python runtime if normal `python3` lacks spreadsheet libraries:
      `/Users/wisemantong/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3`
 
@@ -135,6 +147,7 @@ Example:
 7. Review outputs before presenting them.
    - Check `06数据质量检查`.
    - Confirm the workbook states the repurchase metric rule: same user same natural day = 1 purchase session.
+   - Render the Word summary through LibreOffice or equivalent before final delivery when possible. Check that tables are readable for projection and not squeezed into vertical text.
    - Open the workbook if possible and verify column widths, filters, frozen headers, and readable action text.
    - If exact values look suspicious, inspect the raw rows rather than smoothing over the issue.
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Build Markdown and Word operating summaries from a RAISHO weekly workbook."""
+"""Build Markdown and Word meeting summaries from a RAISHO weekly workbook."""
 
 from __future__ import annotations
 
 import argparse
+import re
 from pathlib import Path
 from typing import Any
 
@@ -21,8 +22,11 @@ def value_from_checks(checks: pd.DataFrame, key: str, default: Any = "") -> Any:
     return rows.iloc[0]["结果"]
 
 
-def format_money(value: float | int) -> str:
-    return f"{float(value):,.2f}"
+def format_money(value: Any) -> str:
+    try:
+        return f"{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return "0.00"
 
 
 def safe_text(value: Any) -> str:
@@ -39,9 +43,9 @@ def read_sheet(workbook: Path, sheet_name: str) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def summarize_detail(detail_path: Path | None) -> tuple[dict[str, Any], pd.DataFrame]:
+def load_effective_detail(detail_path: Path | None) -> dict[str, Any]:
     if not detail_path or not detail_path.exists():
-        return {}, pd.DataFrame()
+        return {}
 
     raw = read_table(detail_path)
     raw.columns = [str(c).strip() for c in raw.columns]
@@ -68,6 +72,29 @@ def summarize_detail(detail_path: Path | None) -> tuple[dict[str, Any], pd.DataF
     df["_time"] = pd.to_datetime(df[time_col], errors="coerce") if time_col else pd.NaT
     df["_effective"] = effective_mask(df, status_col)
     eff = df[df["_effective"]].copy()
+    return {
+        "raw": raw,
+        "eff": eff,
+        "time_col": time_col or "",
+        "status_col": status_col or "",
+        "source": str(detail_path),
+    }
+
+
+def summarize_eff(eff: pd.DataFrame, raw_rows: int = 0, time_col: str = "") -> tuple[dict[str, Any], pd.DataFrame]:
+    if eff.empty:
+        metrics = {
+            "原始明细行数": raw_rows,
+            "有效明细行数": 0,
+            "去重用户数": 0,
+            "有效订单数": 0,
+            "累计实付": 0.0,
+            "客单价": 0.0,
+            "最早支付时间": "",
+            "最新支付时间": "",
+            "时间字段": time_col,
+        }
+        return metrics, pd.DataFrame(columns=["品类", "客户数", "订单数", "件数", "商品实收"])
 
     orders = (
         eff.groupby("_order", dropna=False)
@@ -77,17 +104,16 @@ def summarize_detail(detail_path: Path | None) -> tuple[dict[str, Any], pd.DataF
     paid = float(orders["订单实收"].sum()) if not orders.empty else 0.0
     order_count = int(orders["_order"].nunique()) if not orders.empty else 0
     metrics = {
-        "原始明细行数": len(raw),
+        "原始明细行数": raw_rows,
         "有效明细行数": len(eff),
-        "去重用户数": int(eff["_uid"].nunique()) if not eff.empty else 0,
+        "去重用户数": int(eff["_uid"].nunique()),
         "有效订单数": order_count,
         "累计实付": paid,
         "客单价": paid / order_count if order_count else 0,
-        "最早支付时间": eff["_time"].min() if not eff.empty else "",
-        "最新支付时间": eff["_time"].max() if not eff.empty else "",
-        "时间字段": time_col or "",
+        "最早支付时间": eff["_time"].min(),
+        "最新支付时间": eff["_time"].max(),
+        "时间字段": time_col,
     }
-
     product = (
         eff.groupby("_category")
         .agg(
@@ -100,9 +126,70 @@ def summarize_detail(detail_path: Path | None) -> tuple[dict[str, Any], pd.DataF
         .rename(columns={"_category": "品类"})
         .sort_values("商品实收", ascending=False)
     )
-    if not product.empty:
-        product["商品实收"] = product["商品实收"].round(2)
+    product["商品实收"] = product["商品实收"].round(2)
     return metrics, product
+
+
+def summarize_detail(detail_path: Path | None) -> tuple[dict[str, Any], pd.DataFrame]:
+    loaded = load_effective_detail(detail_path)
+    if not loaded:
+        return {}, pd.DataFrame()
+    return summarize_eff(loaded["eff"], len(loaded["raw"]), loaded["time_col"])
+
+
+def parse_date_bounds(date_range: str, metrics: dict[str, Any]) -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    dates = re.findall(r"\d{4}-\d{2}-\d{2}", date_range or "")
+    if len(dates) >= 2:
+        start = pd.Timestamp(dates[0])
+        end = pd.Timestamp(dates[1]) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+        return start, end
+    start_raw = metrics.get("最早支付时间")
+    end_raw = metrics.get("最新支付时间")
+    if start_raw == "" or end_raw == "":
+        return None, None
+    return pd.Timestamp(start_raw).normalize(), pd.Timestamp(end_raw).normalize() + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+
+
+def summarize_period(all_detail: Path | None, start: pd.Timestamp | None, end: pd.Timestamp | None) -> tuple[dict[str, Any], pd.DataFrame]:
+    if not all_detail or start is None or end is None:
+        return {}, pd.DataFrame()
+    loaded = load_effective_detail(all_detail)
+    if not loaded:
+        return {}, pd.DataFrame()
+    eff = loaded["eff"]
+    period_eff = eff[(eff["_time"] >= start) & (eff["_time"] <= end)].copy()
+    return summarize_eff(period_eff, len(period_eff), loaded["time_col"])
+
+
+def cumulative_metrics(all_detail: Path | None) -> dict[str, Any]:
+    metrics, _ = summarize_detail(all_detail)
+    return metrics
+
+
+def compute_new_old_users(users: pd.DataFrame, all_detail: Path | None, start: pd.Timestamp | None) -> tuple[Any, Any]:
+    if users.empty or "yz_open_id" not in users.columns or not all_detail or start is None:
+        return "需全量历史对照", "需全量历史对照"
+    loaded = load_effective_detail(all_detail)
+    if not loaded:
+        return "需全量历史对照", "需全量历史对照"
+    orders = (
+        loaded["eff"].groupby("_uid", dropna=False)
+        .agg(first_time=("_time", "min"))
+        .reset_index()
+    )
+    first_times = dict(zip(orders["_uid"], orders["first_time"]))
+    weekly_uids = [safe_text(v) for v in users["yz_open_id"].tolist()]
+    new_count = 0
+    old_count = 0
+    for uid in weekly_uids:
+        first = first_times.get(uid)
+        if pd.isna(first):
+            continue
+        if pd.Timestamp(first) >= start:
+            new_count += 1
+        else:
+            old_count += 1
+    return new_count, old_count
 
 
 def table_to_md(df: pd.DataFrame, columns: list[str], max_rows: int = 12) -> str:
@@ -122,16 +209,214 @@ def table_to_md(df: pd.DataFrame, columns: list[str], max_rows: int = 12) -> str
     return "\n".join(lines)
 
 
+def delta_text(current: Any, previous: Any, unit: str = "") -> str:
+    try:
+        cur = float(current)
+        prev = float(previous)
+    except (TypeError, ValueError):
+        return "暂无上周对比"
+    diff = cur - prev
+    if prev == 0:
+        return f"较上周{'+' if diff >= 0 else ''}{diff:,.2f}{unit}"
+    return f"较上周{'+' if diff >= 0 else ''}{diff:,.2f}{unit}（{diff / prev:+.1%}）"
+
+
+def product_role(category: str) -> str:
+    if category == "玉乃光白标":
+        return "成交主力 / 信任入口 / 复购承接"
+    if category == "玉乃光黑标":
+        return "高信任 / 高客单 / 预售维护"
+    if category.startswith("今治"):
+        return "礼赠 / 转介绍验证 / 生活方式破冰"
+    if category == "AddElm":
+        return "配饰补充 / 低客单搭配 / 兴趣测试"
+    return "观察类目"
+
+
+def product_issue(category: str, row: pd.Series) -> str:
+    if category == "玉乃光黑标":
+        return "样本少，重点看到货后反馈、复购和转介绍。"
+    if category == "玉乃光白标":
+        return "成交基础已有，需要验证是否能升级黑标或形成稳定复购。"
+    if category.startswith("今治"):
+        return "仍需验证礼赠和转介绍，不宜只按销量判断。"
+    if category == "AddElm":
+        return "需要确认是顺手搭配还是可独立经营的品类。"
+    return "先保留观察，不做强推判断。"
+
+
+def product_action(category: str) -> str:
+    if category == "玉乃光黑标":
+        return "5/31 后做一对一体验回访，记录口感、场景和二次需求。"
+    if category == "玉乃光白标":
+        return "回访饮用场景，筛选可升级黑标或可进老客群的人。"
+    if category.startswith("今治"):
+        return "到货后问手感和使用场景，收集可转发反馈。"
+    if category == "AddElm":
+        return "观察是否适合和酒/生活品做组合，不单独加大资源。"
+    return "继续观察成交来源和客户反馈。"
+
+
+def build_product_judgement(product: pd.DataFrame) -> pd.DataFrame:
+    if product.empty:
+        return pd.DataFrame(columns=["商品/类目", "本周成交额", "订单数", "客户数", "当前角色", "当前问题", "下周动作"])
+    rows = []
+    for _, row in product.iterrows():
+        category = safe_text(row.get("品类"))
+        rows.append({
+            "商品/类目": category,
+            "本周成交额": round(float(row.get("商品实收", 0) or 0), 2),
+            "订单数": int(row.get("订单数", 0) or 0),
+            "客户数": int(row.get("客户数", 0) or 0),
+            "当前角色": product_role(category),
+            "当前问题": product_issue(category, row),
+            "下周动作": product_action(category),
+        })
+    return pd.DataFrame(rows)
+
+
+def owner_for_user(row: pd.Series) -> str:
+    if safe_text(row.get("优先级")) == "P0":
+        return "老板/核心运营"
+    distributor = safe_text(row.get("分销员归属"))
+    if distributor:
+        return distributor
+    if "今治" in safe_text(row.get("购买品类")):
+        return "运营"
+    return "运营"
+
+
+def pool_type(row: pd.Series) -> str:
+    priority = safe_text(row.get("优先级"))
+    action = safe_text(row.get("下一步动作"))
+    group = safe_text(row.get("是否进群"))
+    distributor = safe_text(row.get("分销员归属"))
+    if priority == "P0" or "一对一" in action:
+        return "必须一对一客户"
+    if "到货" in action or "体验" in action or "回访" in action:
+        return "收货/体验回访客户"
+    if group and "暂不" not in group:
+        return "可邀请进群客户"
+    if distributor:
+        return "可由分销员跟进客户"
+    return "内容触达客户"
+
+
+def build_customer_pool(users: pd.DataFrame) -> pd.DataFrame:
+    if users.empty:
+        return pd.DataFrame(columns=["经营池", "客户", "本周/历史行为", "判断", "下一步动作", "负责人"])
+    rows = []
+    view = users.sort_values(["优先级", "累计实付"], ascending=[True, False]).head(18)
+    for _, row in view.iterrows():
+        rows.append({
+            "经营池": pool_type(row),
+            "客户": safe_text(row.get("客户显示")),
+            "本周/历史行为": f"{safe_text(row.get('购买品类'))}；{int(row.get('有效订单数', 0) or 0)}单；累计{format_money(row.get('累计实付', 0))}",
+            "判断": safe_text(row.get("用户标签")),
+            "下一步动作": safe_text(row.get("下一步动作")),
+            "负责人": owner_for_user(row),
+        })
+    return pd.DataFrame(rows)
+
+
+def distributor_layer(row: pd.Series) -> str:
+    judgement = safe_text(row.get("质量判断"))
+    paid = float(row.get("累计实付", 0) or 0)
+    customers = int(row.get("带来客户数", 0) or 0)
+    if "重点培养" in judgement:
+        return "重点培养"
+    if paid > 0 and customers >= 2:
+        return "稳定观察"
+    if paid > 0:
+        return "轻培养"
+    return "暂不投入"
+
+
+def build_distributor_rank(distributors: pd.DataFrame) -> pd.DataFrame:
+    if distributors.empty:
+        return pd.DataFrame(columns=["排名", "分销员", "本周成交额", "有效订单数", "成交客户数", "客单价", "复购客户数", "复购率", "高客单客户数", "黑标客户数", "分层", "下周动作"])
+    view = distributors.sort_values(["累计实付", "带来客户数"], ascending=[False, False]).copy()
+    rows = []
+    for i, (_, row) in enumerate(view.iterrows(), start=1):
+        rows.append({
+            "排名": i,
+            "分销员": safe_text(row.get("分销员")),
+            "本周成交额": format_money(row.get("累计实付", 0)),
+            "有效订单数": int(row.get("有效订单数", 0) or 0),
+            "成交客户数": int(row.get("带来客户数", 0) or 0),
+            "客单价": format_money(row.get("客单价", 0)),
+            "复购客户数": int(row.get("复购客户数", 0) or 0),
+            "复购率": safe_text(row.get("复购率")),
+            "高客单客户数": int(row.get("高客单客户数", 0) or 0),
+            "黑标客户数": int(row.get("黑标客户数", 0) or 0),
+            "分层": distributor_layer(row),
+            "下周动作": safe_text(row.get("培养动作")),
+        })
+    return pd.DataFrame(rows)
+
+
+def build_distributor_actions(distributor_rank: pd.DataFrame) -> pd.DataFrame:
+    if distributor_rank.empty:
+        return pd.DataFrame(columns=["分销员", "分层", "下周动作"])
+    return distributor_rank[["分销员", "分层", "下周动作"]].copy()
+
+
+def top_name(df: pd.DataFrame, col: str, fallback: str = "暂无") -> str:
+    if df.empty or col not in df.columns:
+        return fallback
+    return safe_text(df.iloc[0][col]) or fallback
+
+
+def build_change_lines(metrics: dict[str, Any], prev_metrics: dict[str, Any], product: pd.DataFrame, distributors: pd.DataFrame) -> list[str]:
+    top_product = top_name(product, "品类")
+    top_dist = top_name(distributors, "分销员")
+    lines = [
+        f"成交额 {format_money(metrics.get('累计实付', 0))}，{delta_text(metrics.get('累计实付', 0), prev_metrics.get('累计实付', 0), '元') if prev_metrics else '暂无上周对比'}。",
+        f"有效订单 {int(metrics.get('有效订单数', 0) or 0)} 单，成交客户 {int(metrics.get('去重用户数', 0) or 0)} 人。",
+        f"本周成交额最高的商品/类目是 {top_product}。",
+        f"本周分销侧最值得复盘的是 {top_dist}。",
+    ]
+    return lines
+
+
+def build_action_plan(product_judgement: pd.DataFrame, customer_pool: pd.DataFrame, distributor_rank: pd.DataFrame) -> pd.DataFrame:
+    rows = [
+        {"负责人": "老板/核心运营", "动作": "处理 P0 和黑标/高客单客户一对一", "对象": "客户经营池里的必须一对一客户", "截止时间": "本周内", "验证指标": "是否获得反馈、复购意向或转介绍线索"},
+        {"负责人": "运营", "动作": "完成白标、今治、黑标客户回访分组", "对象": "收货/体验回访客户", "截止时间": "本周内", "验证指标": "完成回访人数和可用反馈条数"},
+        {"负责人": "运营", "动作": "给重点分销员发送具体商品素材", "对象": "分销员排行里的重点培养/轻培养对象", "截止时间": "周三前", "验证指标": "分销员是否转发、咨询、带来新客"},
+    ]
+    if not product_judgement.empty:
+        rows.append({"负责人": "内容", "动作": "围绕本周成交主力做一版真实内容", "对象": safe_text(product_judgement.iloc[0].get("商品/类目")), "截止时间": "周五前", "验证指标": "是否带来咨询、收藏、进群或转发"})
+    if not distributor_rank.empty:
+        rows.append({"负责人": "分销员", "动作": "按客户名单轻触达并反馈结果", "对象": "本周有成交分销员", "截止时间": "周日", "验证指标": "反馈客户数、二次咨询数、成交数"})
+    return pd.DataFrame(rows)
+
+
+def build_review_table() -> pd.DataFrame:
+    return pd.DataFrame([
+        {"上周计划动作": "上周动作完成记录", "是否完成": "待补入", "结果": "当前 skill 尚未接入动作台账", "本周处理": "后续接入上周行动清单后自动复盘"},
+    ])
+
+
+def build_validation_questions() -> list[str]:
+    return [
+        "白标客户能不能继续升级到黑标？",
+        "黑标客户到货后是否愿意反馈、复购或转介绍？",
+        "今治是否真的适合礼赠和转介绍？",
+        "哪些分销员能连续带来客户，而不是只偶发成交？",
+        "老客能不能被会员、社群或新品优先权承接？",
+    ]
+
+
 def build_summary_text(
     workbook: Path,
     detail_path: Path | None,
     week_label: str,
     date_range: str,
+    all_detail_path: Path | None = None,
 ) -> tuple[str, dict[str, Any]]:
     users = read_sheet(workbook, "01用户分层表")
-    paths = read_sheet(workbook, "02商品路径表")
     distributors = read_sheet(workbook, "03分销员质量表")
-    rules = read_sheet(workbook, "06规则校准说明")
     checks = read_sheet(workbook, "07数据质量检查")
     metrics, product = summarize_detail(detail_path)
 
@@ -153,24 +438,88 @@ def build_summary_text(
         "复购客户数/复购率按购买会话数计算；同一用户同一自然日多单合并为1次购买会话。",
     )
 
-    p0 = users[users["优先级"].astype(str) == "P0"] if "优先级" in users.columns else pd.DataFrame()
-    p1 = users[users["优先级"].astype(str) == "P1"] if "优先级" in users.columns else pd.DataFrame()
-    top_dist = distributors.head(1).iloc[0].to_dict() if not distributors.empty else {}
-    top_dist_name = safe_text(top_dist.get("分销员", "暂无"))
+    start_ts, end_ts = parse_date_bounds(date_range, metrics)
+    all_detail_for_compare = all_detail_path or detail_path
+    cumulative = cumulative_metrics(all_detail_for_compare)
+    if all_detail_path and start_ts is not None:
+        days = (end_ts.normalize() - start_ts.normalize()).days + 1 if end_ts is not None else 7
+        prev_start = start_ts - pd.Timedelta(days=days)
+        prev_end = start_ts - pd.Timedelta(seconds=1)
+        prev_metrics, _ = summarize_period(all_detail_path, prev_start, prev_end)
+    else:
+        prev_metrics = {}
+    new_customers, old_customers = compute_new_old_users(users, all_detail_path, start_ts)
 
-    high_signal = "黑标和高客单用户开始形成高信任成交"
-    if not product.empty and "玉乃光黑标" in product["品类"].astype(str).tolist():
+    product_judgement = build_product_judgement(product)
+    customer_pool = build_customer_pool(users)
+    distributor_rank = build_distributor_rank(distributors)
+    distributor_actions = build_distributor_actions(distributor_rank)
+    action_review = build_review_table()
+    action_plan = build_action_plan(product_judgement, customer_pool, distributor_rank)
+    change_lines = build_change_lines(metrics, prev_metrics, product, distributors)
+    questions = build_validation_questions()
+
+    top_dist_name = top_name(distributor_rank, "分销员")
+    top_product_name = top_name(product, "品类")
+    black_amount = 0.0
+    if not product.empty and "品类" in product.columns:
         black_amount = float(product.loc[product["品类"].astype(str) == "玉乃光黑标", "商品实收"].sum())
-        if black_amount > 0:
-            high_signal = f"黑标贡献 {format_money(black_amount)}，是本期最强的高信任成交信号"
+    signal = f"黑标贡献 {format_money(black_amount)}，仍是最强高信任信号" if black_amount > 0 else f"{top_product_name} 是本周主要成交信号"
 
-    rules_text = "暂无"
-    if not rules.empty:
-        rules_text = "；".join(f"{r.get('项目', '')}：{r.get('说明', '')}" for _, r in rules.iterrows())
+    dashboard = pd.DataFrame([
+        {"指标": "本周成交额", "本周": format_money(metrics.get("累计实付", 0)), "累计/对比": f"累计 {format_money(cumulative.get('累计实付', 0))}"},
+        {"指标": "有效订单数", "本周": int(metrics.get("有效订单数", 0) or 0), "累计/对比": int(cumulative.get("有效订单数", 0) or 0)},
+        {"指标": "成交客户数", "本周": int(metrics.get("去重用户数", 0) or 0), "累计/对比": int(cumulative.get("去重用户数", 0) or 0)},
+        {"指标": "新客/老客", "本周": f"新客 {new_customers} / 老客 {old_customers}", "累计/对比": "按 yz_open_id 与历史首购时间判断"},
+        {"指标": "客单价", "本周": format_money(metrics.get("客单价", 0)), "累计/对比": format_money(cumulative.get("客单价", 0))},
+        {"指标": "本周对比", "本周": delta_text(metrics.get("累计实付", 0), prev_metrics.get("累计实付", 0), "元") if prev_metrics else "暂无上周对比", "累计/对比": ""},
+    ])
 
-    md = f"""# 来处有赞经营分析总结 {week_label}
+    md = f"""# 来处周经营总结 {week_label}
 
-## 数据口径
+## 1. 本周一句话结论
+
+本周成交额 {format_money(metrics.get('累计实付', 0))}，有效订单 {int(metrics.get('有效订单数', 0) or 0)} 单，成交客户 {int(metrics.get('去重用户数', 0) or 0)} 人。{signal}；分销侧以 {top_dist_name} 最值得优先复盘。下周重点是把高信任客户、白标客户和重点分销员拆成具体跟进动作。
+
+## 2. 核心数据看板
+
+{table_to_md(dashboard, ['指标', '本周', '累计/对比'], 20)}
+
+## 3. 本周变化
+
+{chr(10).join(f'- {line}' for line in change_lines)}
+
+## 4. 商品经营判断
+
+{table_to_md(product_judgement, ['商品/类目', '本周成交额', '订单数', '客户数', '当前角色', '当前问题', '下周动作'], 10)}
+
+## 5. 客户经营池
+
+{table_to_md(customer_pool, ['经营池', '客户', '本周/历史行为', '判断', '下一步动作', '负责人'], 18)}
+
+## 6. 分销员排行与经营判断
+
+### 6.1 分销员销售排行
+
+{table_to_md(distributor_rank, ['排名', '分销员', '本周成交额', '有效订单数', '成交客户数', '客单价', '复购客户数', '复购率', '高客单客户数', '黑标客户数', '分层'], 20)}
+
+### 6.2 分销员下周动作
+
+{table_to_md(distributor_actions, ['分销员', '分层', '下周动作'], 20)}
+
+## 7. 本周经营动作复盘
+
+{table_to_md(action_review, ['上周计划动作', '是否完成', '结果', '本周处理'], 10)}
+
+## 8. 下周行动清单
+
+{table_to_md(action_plan, ['负责人', '动作', '对象', '截止时间', '验证指标'], 10)}
+
+## 9. 下周要验证的问题
+
+{chr(10).join(f'- {question}' for question in questions)}
+
+## 10. 附录：数据口径
 
 - 分析区间：{date_range or week_label}
 - 数据来源：有赞自助取数 `来处订单商品明细_yz_open_id`
@@ -179,76 +528,34 @@ def build_summary_text(
 - 实际最新支付时间：{metrics.get('最新支付时间', '')}
 - 原始明细行数：{metrics.get('原始明细行数', 0)}
 - 有效明细行数：{metrics.get('有效明细行数', 0)}
-- 去重用户数：{metrics.get('去重用户数', 0)}
-- 有效订单数：{metrics.get('有效订单数', 0)}
-- 复购统计口径：{repurchase_note}
-- 累计实付：{format_money(metrics.get('累计实付', 0))}
-- 客单价：{format_money(metrics.get('客单价', 0))}
-
-## 一句话判断
-
-本期来处的经营重点不是单纯销售额，而是信任结构是否成立。当前最清楚的信号是：{high_signal}；分销侧以 {top_dist_name} 最值得优先复盘。
-
-## 商品结构
-
-{table_to_md(product, ['品类', '客户数', '订单数', '件数', '商品实收'])}
-
-## 用户结构
-
-- P0 重点用户：{len(p0)} 人，累计实付 {format_money(p0['累计实付'].sum() if not p0.empty and '累计实付' in p0.columns else 0)}
-- P1 跟进用户：{len(p1)} 人，累计实付 {format_money(p1['累计实付'].sum() if not p1.empty and '累计实付' in p1.columns else 0)}
-- 本期规则校准：{rules_text}
-
-## 重点用户
-
-{table_to_md(users, ['优先级', '客户显示', '有效订单数', '累计实付', '客单价', '购买品类', '分销员归属', '下一步动作'], 15)}
-
-## 商品路径
-
-{table_to_md(paths, ['起点品类', '后续品类', '迁移人数', '迁移金额', '典型用户', '信任解释', '下一步商品策略'])}
-
-## 分销员表现
-
-{table_to_md(distributors, ['分销员', '带来客户数', '有效订单数', '累计实付', '客单价', '复购率', '高客单客户数', '黑标客户数', '质量判断', '培养动作'])}
-
-## 哪里已经成立
-
-- 高信任商品的成交信号已经出现，优先看黑标、白标和高客单用户。
-- 买家侧已经按 `yz_open_id` 合并，可以持续追踪复购和商品迁移。
-- 分销侧已经能看出不同分销员的带客能力差异。
-
-## 哪里还没成立
-
-- 分销员目前仍按昵称聚合，若分销员改名或重名，需要接入分销员 ID / 手机号。
-- 行为数据仍不完整，浏览、收藏、加购、停留等信号还没有稳定进入四张表。
-- 复购和转介绍是否成立，需要继续看后续周的数据。
-
-## 本周经营动作
-
-1. P0 用户做一对一维护，先问体验和预期，不要只催单。
-2. P1 用户进入复购池，用会员、社群、新品优先权承接。
-3. 对重点分销员做单独复盘，拆分哪些客户由老板跟，哪些由分销员跟。
-4. 对低信号用户只做轻触达，观察咨询、复购、转介绍和再次浏览。
-
-## 下周要验证
-
-- 黑标/高客单用户是否产生反馈、复购或转介绍。
-- 今治类生活品是否真的带来礼赠和转介绍。
-- 重点分销员的客户是否能继续复购或升级。
-- 新增用户是否能从尝鲜进入复购池。
+- 用户去重口径：按 `yz_open_id`
+- 有效订单口径：排除关闭、取消、未支付、待付款、全额退款等明确无效状态
+- 复购口径：{repurchase_note}
+- 分销员口径：当前按分销员昵称聚合；如分销员改名或重名，需要接入分销员 ID / 手机号
+- 原始数据文件：`{detail_path or ''}`
 """
     context = {
-        "users": users,
-        "paths": paths,
-        "distributors": distributors,
-        "product": product,
         "metrics": metrics,
-        "复购统计口径": repurchase_note,
+        "cumulative": cumulative,
+        "dashboard": dashboard,
+        "change_lines": change_lines,
+        "product_judgement": product_judgement,
+        "customer_pool": customer_pool,
+        "distributor_rank": distributor_rank,
+        "distributor_actions": distributor_actions,
+        "action_review": action_review,
+        "action_plan": action_plan,
+        "questions": questions,
+        "repurchase_note": repurchase_note,
+        "detail_path": str(detail_path or ""),
+        "one_sentence": f"本周成交额 {format_money(metrics.get('累计实付', 0))}，有效订单 {int(metrics.get('有效订单数', 0) or 0)} 单，成交客户 {int(metrics.get('去重用户数', 0) or 0)} 人。{signal}；分销侧以 {top_dist_name} 最值得优先复盘。",
     }
     return md, context
 
 
 def add_dataframe_table(doc, df: pd.DataFrame, columns: list[str], max_rows: int = 12) -> None:
+    from docx.shared import Pt
+
     view = df[[c for c in columns if c in df.columns]].head(max_rows).copy()
     if view.empty:
         doc.add_paragraph("暂无数据")
@@ -261,6 +568,17 @@ def add_dataframe_table(doc, df: pd.DataFrame, columns: list[str], max_rows: int
         cells = table.add_row().cells
         for i, col in enumerate(view.columns):
             cells[i].text = safe_text(row[col])
+    for row in table.rows:
+        for cell in row.cells:
+            for paragraph in cell.paragraphs:
+                paragraph.paragraph_format.space_after = Pt(0)
+                for run in paragraph.runs:
+                    run.font.size = Pt(8)
+
+
+def add_bullets(doc, items: list[str]) -> None:
+    for item in items:
+        doc.add_paragraph(item, style="List Bullet")
 
 
 def build_docx(
@@ -270,82 +588,99 @@ def build_docx(
     context: dict[str, Any],
 ) -> None:
     from docx import Document
+    from docx.enum.section import WD_ORIENT
     from docx.enum.text import WD_ALIGN_PARAGRAPH
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Inches, Pt, RGBColor
 
     doc = Document()
+    section = doc.sections[0]
+    section.orientation = WD_ORIENT.LANDSCAPE
+    section.page_width, section.page_height = section.page_height, section.page_width
+    section.top_margin = Inches(0.45)
+    section.bottom_margin = Inches(0.45)
+    section.left_margin = Inches(0.45)
+    section.right_margin = Inches(0.45)
+
     styles = doc.styles
     styles["Normal"].font.name = "Arial"
-    styles["Normal"].font.size = Pt(10.5)
+    styles["Normal"].font.size = Pt(9)
     styles["Title"].font.name = "Arial"
     styles["Title"].font.size = Pt(20)
     styles["Heading 1"].font.name = "Arial"
-    styles["Heading 1"].font.size = Pt(15)
+    styles["Heading 1"].font.size = Pt(14)
     styles["Heading 1"].font.color.rgb = RGBColor(11, 92, 126)
     styles["Heading 2"].font.name = "Arial"
-    styles["Heading 2"].font.size = Pt(12.5)
-
-    metrics = context["metrics"]
-    repurchase_note = context.get("复购统计口径", "同一用户同一自然日多单合并为1次购买会话。")
-    product = context["product"]
-    users = context["users"]
-    paths = context["paths"]
-    distributors = context["distributors"]
-    p0 = users[users["优先级"].astype(str) == "P0"] if "优先级" in users.columns else pd.DataFrame()
-    p1 = users[users["优先级"].astype(str) == "P1"] if "优先级" in users.columns else pd.DataFrame()
-    top_dist = safe_text(distributors.iloc[0]["分销员"]) if not distributors.empty and "分销员" in distributors.columns else "暂无"
+    styles["Heading 2"].font.size = Pt(11.5)
 
     title = doc.add_paragraph()
     title.style = "Title"
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    title.add_run("来处有赞经营分析总结")
+    title.add_run("来处周经营总结")
     subtitle = doc.add_paragraph()
     subtitle.alignment = WD_ALIGN_PARAGRAPH.CENTER
     subtitle.add_run(date_range or week_label).italic = True
 
-    doc.add_heading("核心判断", level=1)
-    doc.add_paragraph(
-        f"本期有效订单 {metrics.get('有效订单数', 0)} 单，去重用户 {metrics.get('去重用户数', 0)} 人，"
-        f"累计实付 {format_money(metrics.get('累计实付', 0))}，客单价 {format_money(metrics.get('客单价', 0))}。"
-        f"经营重点应放在高信任用户维护、复购承接和重点分销员复盘，其中 {top_dist} 是本期最值得优先观察的分销对象。"
-    )
+    doc.add_heading("1. 本周一句话结论", level=1)
+    doc.add_paragraph(context["one_sentence"])
 
-    doc.add_heading("数据口径", level=1)
-    for label in ["时间字段", "最早支付时间", "最新支付时间", "原始明细行数", "有效明细行数", "去重用户数", "有效订单数"]:
-        doc.add_paragraph(f"{label}：{metrics.get(label, '')}", style=None)
-    doc.add_paragraph(f"复购统计口径：{repurchase_note}", style=None)
+    doc.add_heading("2. 核心数据看板", level=1)
+    add_dataframe_table(doc, context["dashboard"], ["指标", "本周", "累计/对比"], 20)
 
-    doc.add_heading("商品结构", level=1)
-    add_dataframe_table(doc, product, ["品类", "客户数", "订单数", "件数", "商品实收"])
+    doc.add_heading("3. 本周变化", level=1)
+    add_bullets(doc, context["change_lines"])
 
-    doc.add_heading("用户结构", level=1)
-    doc.add_paragraph(f"P0 重点用户：{len(p0)} 人，累计实付 {format_money(p0['累计实付'].sum() if not p0.empty and '累计实付' in p0.columns else 0)}")
-    doc.add_paragraph(f"P1 跟进用户：{len(p1)} 人，累计实付 {format_money(p1['累计实付'].sum() if not p1.empty and '累计实付' in p1.columns else 0)}")
-    add_dataframe_table(doc, users, ["优先级", "客户显示", "有效订单数", "累计实付", "客单价", "购买品类", "下一步动作"], 12)
+    doc.add_heading("4. 商品经营判断", level=1)
+    add_dataframe_table(doc, context["product_judgement"], ["商品/类目", "本周成交额", "订单数", "客户数", "当前角色", "当前问题", "下周动作"], 10)
 
-    doc.add_heading("商品路径", level=1)
-    add_dataframe_table(doc, paths, ["起点品类", "后续品类", "迁移人数", "迁移金额", "典型用户", "信任解释"], 10)
+    doc.add_heading("5. 客户经营池", level=1)
+    add_dataframe_table(doc, context["customer_pool"], ["经营池", "客户", "本周/历史行为", "判断", "下一步动作", "负责人"], 18)
 
-    doc.add_heading("分销员表现", level=1)
-    add_dataframe_table(doc, distributors, ["分销员", "带来客户数", "有效订单数", "累计实付", "复购率", "黑标客户数", "质量判断"], 12)
-    doc.add_paragraph("注：买家客户按 yz_open_id 去重；分销员当前按昵称字段聚合，若分销员改名或重名，需要接入分销员 ID / 手机号。")
+    doc.add_heading("6. 分销员排行与经营判断", level=1)
+    doc.add_heading("6.1 分销员销售排行", level=2)
+    add_dataframe_table(doc, context["distributor_rank"], ["排名", "分销员", "本周成交额", "有效订单数", "成交客户数", "客单价", "复购客户数", "复购率", "高客单客户数", "黑标客户数", "分层"], 20)
+    doc.add_heading("6.2 分销员下周动作", level=2)
+    add_dataframe_table(doc, context["distributor_actions"], ["分销员", "分层", "下周动作"], 20)
 
-    doc.add_heading("本周经营动作", level=1)
-    actions = [
-        "P0 用户做一对一维护，先问体验和预期，不只催单。",
-        "P1 用户进入复购池，用会员、社群、新品优先权承接。",
-        "重点分销员做单独复盘，拆分老板跟进和分销员跟进对象。",
-        "低信号用户只做轻触达，观察咨询、复购、转介绍和再次浏览。",
+    doc.add_heading("7. 本周经营动作复盘", level=1)
+    add_dataframe_table(doc, context["action_review"], ["上周计划动作", "是否完成", "结果", "本周处理"], 10)
+
+    doc.add_heading("8. 下周行动清单", level=1)
+    add_dataframe_table(doc, context["action_plan"], ["负责人", "动作", "对象", "截止时间", "验证指标"], 10)
+
+    doc.add_heading("9. 下周要验证的问题", level=1)
+    add_bullets(doc, context["questions"])
+
+    doc.add_heading("10. 附录：数据口径", level=1)
+    metrics = context["metrics"]
+    appendix = [
+        f"分析区间：{date_range or week_label}",
+        "数据来源：有赞自助取数 来处订单商品明细_yz_open_id",
+        f"分析时间字段：{metrics.get('时间字段', '')}",
+        f"实际最早支付时间：{metrics.get('最早支付时间', '')}",
+        f"实际最新支付时间：{metrics.get('最新支付时间', '')}",
+        f"原始明细行数：{metrics.get('原始明细行数', 0)}",
+        f"有效明细行数：{metrics.get('有效明细行数', 0)}",
+        "用户去重口径：按 yz_open_id",
+        "有效订单口径：排除关闭、取消、未支付、待付款、全额退款等明确无效状态",
+        f"复购口径：{context['repurchase_note']}",
+        "分销员口径：当前按分销员昵称聚合；如分销员改名或重名，需要接入分销员 ID / 手机号",
+        f"原始数据文件：{context['detail_path']}",
     ]
-    for item in actions:
-        doc.add_paragraph(item, style="List Number")
+    add_bullets(doc, appendix)
 
     out_docx.parent.mkdir(parents=True, exist_ok=True)
     doc.save(out_docx)
 
 
-def build_summary(workbook: Path, output_dir: Path, week_label: str, detail: Path | None = None, date_range: str = "") -> tuple[Path, Path]:
-    md, context = build_summary_text(workbook, detail, week_label, date_range)
+def build_summary(
+    workbook: Path,
+    output_dir: Path,
+    week_label: str,
+    detail: Path | None = None,
+    date_range: str = "",
+    all_detail: Path | None = None,
+) -> tuple[Path, Path]:
+    md, context = build_summary_text(workbook, detail, week_label, date_range, all_detail)
     output_dir.mkdir(parents=True, exist_ok=True)
     md_path = output_dir / f"经营分析总结_{week_label}.md"
     docx_path = output_dir / f"经营分析总结_{week_label}.docx"
@@ -360,16 +695,19 @@ def main() -> None:
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--week-label", required=True)
     parser.add_argument("--detail")
+    parser.add_argument("--all-detail")
     parser.add_argument("--date-range", default="")
     args = parser.parse_args()
 
     detail = Path(args.detail).expanduser() if args.detail else None
+    all_detail = Path(args.all_detail).expanduser() if args.all_detail else None
     md_path, docx_path = build_summary(
         Path(args.workbook).expanduser(),
         Path(args.output_dir).expanduser(),
         args.week_label,
         detail,
         args.date_range,
+        all_detail,
     )
     print(md_path)
     print(docx_path)
