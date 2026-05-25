@@ -178,7 +178,7 @@ Default script families:
 
 - `S01A`: Imabari/new buyer delivery and usage feedback.
 - `S02A`: black-label presale buyer 1:1 trust maintenance.
-- `S02B`: sake/high-value buyer upgrade from Honshin/basic tasting to black label.
+- `S02B`: sake/high-value buyer upgrade from white-label/basic tasting to black label.
 - `S02C`: high-value but unclear-signal manual review before strong 1:1.
 - `S03A`: repeat buyer membership/group invitation.
 - `S04A`: distributor nurturing and material support.
@@ -187,7 +187,7 @@ Default script families:
 Suggested action mapping:
 
 - 黑标 or high-AOV: 1:1 follow-up, ask feedback, explain presale rhythm, offer next allocation.
-- 本真 -> 黑标 potential: compare rice, aroma, and occasion; invite black-label tasting or reservation.
+- 白标 -> 黑标 potential: compare rice, aroma, and occasion; invite black-label tasting or reservation.
 - 今治毛巾/bath towel: ask use/texture feedback, encourage gift or referral scenario.
 - one-time low-AOV buyer: light group/content nurture, do not over-sell.
 - repeat buyer: invite membership, points, private group, or early access.

@@ -319,7 +319,7 @@ Keep action tables executable:
 
 Use these categories unless the user gives newer business facts:
 
-- `玉乃光本真/品鉴`
+- `玉乃光白标`
 - `玉乃光黑标`
 - `今治毛巾`
 - `今治浴巾`

@@ -83,7 +83,7 @@ def categorize_product(name: str) -> str:
     if "黑标" in text or "至臻" in text:
         return "玉乃光黑标"
     if "玉乃光" in text or "本真" in text or "品鉴" in text:
-        return "玉乃光本真/品鉴"
+        return "玉乃光白标"
     if "浴巾" in text:
         return "今治浴巾"
     if "毛巾" in text or "今治" in text:
@@ -173,7 +173,7 @@ def classify_user(row: pd.Series, profile: dict[str, object]) -> tuple[str, str,
         rules.append("dynamic_high_value")
     if has_black or (has_sake and (aov_pct >= 0.60 or paid_pct >= 0.60)):
         tags.append("黑标潜力用户")
-        reasons.append("已买黑标或酒类消费信号较强，适合观察本真到黑标的信任迁移")
+        reasons.append("已买黑标或酒类消费信号较强，适合观察白标到黑标的信任迁移")
         rules.append("black_label_potential")
     if has_distributor or is_repeat:
         tags.append("分销潜力用户")
@@ -205,11 +205,11 @@ def classify_user(row: pd.Series, profile: dict[str, object]) -> tuple[str, str,
         priority = "P0"
         if has_black:
             action = "预售期一对一确认期待，5/31后收反馈"
-            product = "玉乃光黑标；后续承接本真复购/同圈层推荐"
+            product = "玉乃光黑标；后续承接白标复购/同圈层推荐"
             script = "S02A"
         elif has_sake:
-            action = "一对一做本真到黑标的差异解释"
-            product = "玉乃光黑标或本真复购组合"
+            action = "一对一做白标到黑标的差异解释"
+            product = "玉乃光黑标或白标复购组合"
             script = "S02B"
         else:
             action = "高价值用户一对一回访，先问体验再判断升单"
@@ -234,14 +234,14 @@ def classify_user(row: pd.Series, profile: dict[str, object]) -> tuple[str, str,
             script = "S01A"
         else:
             action = "观察升级意向，先问体验再推高阶品"
-            product = "本真/黑标或对应高阶组合"
+            product = "白标/黑标或对应高阶组合"
             script = "S02B"
         group = "轻邀请进群或老客群"
         one_to_one = "建议一对一"
     elif has_distributor:
         priority = "P2"
         action = "让分销员做轻触达"
-        product = "本真或今治入门款"
+        product = "白标或今治入门款"
         group = "按分销员圈层"
         one_to_one = "可由分销员一对一"
         script = "S04A"
@@ -495,7 +495,7 @@ def build_tables(detail_path: Path, output_dir: Path, week_label: str, audit_not
     scripts = pd.DataFrame([
         {"话术编号": "S01A", "适用对象": "今治预售/新买家", "话术用途": "到货后体验反馈和转介绍", "话术": "先确认到货节奏，5/31后重点问手感、家用和礼赠反馈；有自然好评再请对方推荐给熟人。"},
         {"话术编号": "S02A", "适用对象": "黑标预售用户", "话术用途": "高信任一对一维护", "话术": "先感谢预售期信任，说明到货节奏；到货后重点问米种、口感和饮用场景，再判断是否进入核心品鉴名单。"},
-        {"话术编号": "S02B", "适用对象": "本真/高客单但未买黑标用户", "话术用途": "从本真到黑标的信任升级", "话术": "先问本真体验，再解释黑标和本真的差异，不直接硬推；看对方是否关心米种、风味、限量或礼赠。"},
+        {"话术编号": "S02B", "适用对象": "白标/高客单但未买黑标用户", "话术用途": "从白标到黑标的信任升级", "话术": "先问白标体验，再解释黑标和白标的差异，不直接硬推；看对方是否关心米种、风味、限量或礼赠。"},
         {"话术编号": "S02C", "适用对象": "高价值但原因不完全明确用户", "话术用途": "人工复核后一对一", "话术": "先查看关系来源和历史沟通，再决定由老板、核心运营或分销员跟进，避免只因金额高就强推。"},
         {"话术编号": "S03A", "适用对象": "复购用户", "话术用途": "会员/社群承接", "话术": "强调对方已不是第一次购买，邀请进入老客优先名单，后续新品、限量和组合权益先同步。"},
         {"话术编号": "S04A", "适用对象": "分销相关用户/分销员", "话术用途": "分销转化支持", "话术": "给分销员具体客户反馈和一版可转发素材，让分销员先轻触达，再由运营判断是否接入一对一。"},
@@ -550,7 +550,7 @@ def build_tables(detail_path: Path, output_dir: Path, week_label: str, audit_not
 def explain_path(start: str, next_cat: str) -> str:
     if start.startswith("今治") and "玉乃光" in next_cat:
         return "从低门槛生活品迁移到酒类信任，说明日用品可承担破冰。"
-    if "本真" in start and "黑标" in next_cat:
+    if "白标" in start and "黑标" in next_cat:
         return "从入门酒款升级到高客单预售，说明酒类信任开始加深。"
     if "玉乃光" in start and next_cat.startswith("今治"):
         return "从酒类信任迁移到生活品，适合做礼赠和复购承接。"
@@ -559,11 +559,11 @@ def explain_path(start: str, next_cat: str) -> str:
 
 def product_strategy(start: str, next_cat: str) -> str:
     if "黑标" in next_cat:
-        return "保留黑标稀缺性，用本真体验和一对一解释承接升级。"
+        return "保留黑标稀缺性，用白标体验和一对一解释承接升级。"
     if next_cat.startswith("今治"):
         return "用触感、礼赠、家庭使用场景推动转介绍。"
     if "玉乃光" in next_cat:
-        return "补充产地、米种、饮用场景内容，推动品鉴复购。"
+        return "补充产地、米种、饮用场景内容，推动白标复购。"
     return "先观察路径样本，避免过早定义主推逻辑。"
 
 
