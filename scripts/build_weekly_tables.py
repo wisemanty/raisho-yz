@@ -88,7 +88,8 @@ def categorize_product(name: str) -> str:
         return "今治浴巾"
     if "毛巾" in text or "今治" in text:
         return "今治毛巾"
-    if "AddElm" in text or "ADELM" in text.upper():
+    upper_text = text.upper()
+    if "ADDELM" in upper_text or "ADELM" in upper_text or upper_text.startswith("ADD."):
         return "AddElm"
     return "其他"
 
