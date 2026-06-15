@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -207,6 +208,140 @@ def table_to_md(df: pd.DataFrame, columns: list[str], max_rows: int = 12) -> str
         cells = [safe_text(row[col]).replace("|", "/") for col in view.columns]
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
+
+
+def format_percent(value: Any) -> str:
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if raw == -999999:
+        return "-"
+    return f"{raw * 100:.2f}%"
+
+
+def cents_to_money(value: Any) -> str:
+    try:
+        raw = float(value)
+    except (TypeError, ValueError):
+        return "0.00"
+    if raw == -999999:
+        return "-"
+    return format_money(raw / 100)
+
+
+def api_result(payload: dict[str, Any]) -> Any:
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if isinstance(data, dict):
+        if "result" in data:
+            return data.get("result")
+        if "data" in data:
+            return data.get("data")
+    return data
+
+
+def find_flow_metrics_file(detail_path: Path | None) -> Path | None:
+    if not detail_path:
+        return None
+    raw_dir = detail_path.parent
+    candidates = sorted(raw_dir.glob("youzan_flow_metrics_*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    return candidates[0] if candidates else None
+
+
+def load_flow_metrics(detail_path: Path | None) -> dict[str, Any]:
+    flow_path = find_flow_metrics_file(detail_path)
+    if not flow_path:
+        return {}
+    try:
+        with flow_path.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return {}
+    data["_source_path"] = str(flow_path)
+    return data
+
+
+def product_display_from_name(name: str) -> str:
+    category = categorize_product(name)
+    return name if category == "其他" else category
+
+
+def build_flow_section(flow: dict[str, Any]) -> dict[str, Any]:
+    if not flow:
+        return {
+            "flow_dashboard": pd.DataFrame(),
+            "page_rank": pd.DataFrame(),
+            "goods_uv_rank": pd.DataFrame(),
+            "addcart_rank": pd.DataFrame(),
+            "flow_lines": [],
+            "flow_source": "",
+        }
+
+    flow_all = api_result(flow.get("flowAll", {})) or {}
+    flow_weapp = api_result(flow.get("flowWeapp", {})) or {}
+    flow_h5 = api_result(flow.get("flowH5", {})) or {}
+    goods_overview = api_result(flow.get("goodsOverview", {})) or {}
+    if isinstance(goods_overview, dict) and "data" in goods_overview:
+        goods_overview = goods_overview.get("data") or {}
+
+    dashboard = pd.DataFrame([
+        {"指标": "全店访客数", "小程序": int(flow_weapp.get("teamTotalUv", 0) or 0), "全店": int(flow_all.get("teamTotalUv", 0) or 0), "H5": int(flow_h5.get("teamTotalUv", 0) or 0)},
+        {"指标": "浏览量", "小程序": int(flow_weapp.get("teamTotalPv", 0) or 0), "全店": int(flow_all.get("teamTotalPv", 0) or 0), "H5": int(flow_h5.get("teamTotalPv", 0) or 0)},
+        {"指标": "访问-支付转化率", "小程序": format_percent(flow_weapp.get("totalPayRate")), "全店": format_percent(flow_all.get("totalPayRate")), "H5": format_percent(flow_h5.get("totalPayRate"))},
+        {"指标": "访问-下单转化率", "小程序": format_percent(flow_weapp.get("visitOrderRatio")), "全店": format_percent(flow_all.get("visitOrderRatio")), "H5": format_percent(flow_h5.get("visitOrderRatio"))},
+        {"指标": "平均停留秒数", "小程序": round(float(flow_weapp.get("stayTimeAvg", 0) or 0), 2), "全店": round(float(flow_all.get("stayTimeAvg", 0) or 0), 2), "H5": round(float(flow_h5.get("stayTimeAvg", 0) or 0), 2)},
+        {"指标": "人均浏览量", "小程序": round(float(flow_weapp.get("perCapitaBrowsing", 0) or 0), 2), "全店": round(float(flow_all.get("perCapitaBrowsing", 0) or 0), 2), "H5": round(float(flow_h5.get("perCapitaBrowsing", 0) or 0), 2)},
+        {"指标": "加购人数", "小程序": int(flow_weapp.get("addCartUv", 0) or 0), "全店": int(flow_all.get("addCartUv", 0) or 0), "H5": int(flow_h5.get("addCartUv", 0) or 0)},
+        {"指标": "支付金额", "小程序": cents_to_money(flow_weapp.get("payAmount", 0)), "全店": cents_to_money(flow_all.get("payAmount", 0)), "H5": cents_to_money(flow_h5.get("payAmount", 0))},
+    ])
+
+    page_data = api_result(flow.get("miniPages", {})) or {}
+    pages = page_data.get("page", []) if isinstance(page_data, dict) else []
+    goods_pages = page_data.get("goods", []) if isinstance(page_data, dict) else []
+    page_rank = pd.DataFrame([
+        {"页面": safe_text(item.get("pageName")), "UV": int(item.get("uv", 0) or 0)}
+        for item in pages[:8]
+    ])
+    goods_uv_rank = pd.DataFrame([
+        {"商品": product_display_from_name(safe_text(item.get("pageName"))), "页面UV": int(item.get("uv", 0) or 0)}
+        for item in goods_pages[:10]
+    ])
+    if not goods_uv_rank.empty:
+        goods_uv_rank = (
+            goods_uv_rank.groupby("商品", as_index=False)["页面UV"].sum().sort_values("页面UV", ascending=False)
+        )
+
+    goods_top = api_result(flow.get("goodsTop", {})) or {}
+    addcart_top = goods_top.get("addCartTop", []) if isinstance(goods_top, dict) else []
+    addcart_rank = pd.DataFrame([
+        {"商品": product_display_from_name(safe_text(item.get("goodsName"))), "加购件数": int(item.get("addCartNum", 0) or 0)}
+        for item in addcart_top[:8]
+    ])
+    if not addcart_rank.empty:
+        addcart_rank = (
+            addcart_rank.groupby("商品", as_index=False)["加购件数"].sum().sort_values("加购件数", ascending=False)
+        )
+
+    flow_lines = []
+    if int(flow_weapp.get("teamTotalUv", 0) or 0) > 0:
+        flow_lines.append(
+            f"小程序是本期主要承接场：访客 {int(flow_weapp.get('teamTotalUv', 0) or 0)}，浏览量 {int(flow_weapp.get('teamTotalPv', 0) or 0)}，访问-支付转化率 {format_percent(flow_weapp.get('totalPayRate'))}。"
+        )
+    if int(flow_h5.get("payUv", 0) or 0) == 0:
+        flow_lines.append(f"H5 本期访客 {int(flow_h5.get('teamTotalUv', 0) or 0)}，支付人数 0，暂不是主要成交场。")
+    if isinstance(goods_overview, dict) and goods_overview:
+        flow_lines.append(
+            f"商品页有浏览基础：商品访客 {int(goods_overview.get('visitedUv', 0) or 0)}，商品浏览量 {int(goods_overview.get('goodsPv', 0) or 0)}，加购人数 {int(goods_overview.get('addCartUv', 0) or 0)}。"
+        )
+
+    return {
+        "flow_dashboard": dashboard,
+        "page_rank": page_rank,
+        "goods_uv_rank": goods_uv_rank,
+        "addcart_rank": addcart_rank,
+        "flow_lines": flow_lines,
+        "flow_source": safe_text(flow.get("_source_path")),
+    }
 
 
 def period_words(start: pd.Timestamp | None, end: pd.Timestamp | None) -> dict[str, str]:
@@ -528,6 +663,7 @@ def build_summary_text(
     action_plan = build_action_plan(product_judgement, customer_pool, distributor_rank, words)
     change_lines = build_change_lines(metrics, prev_metrics, product, distributors, words)
     questions = build_validation_questions()
+    flow_section = build_flow_section(load_flow_metrics(detail_path))
 
     top_dist_name = top_name(distributor_rank, "分销员")
     top_product_name = top_name(product, "品类")
@@ -558,41 +694,63 @@ def build_summary_text(
 
 {table_to_md(dashboard, ['指标', words['current'], '累计/对比'], 20)}
 
-## 3. {words['current_change']}
+## 3. 流量与浏览转化
+
+{chr(10).join(f'- {line}' for line in flow_section['flow_lines']) if flow_section['flow_lines'] else '暂无流量浏览数据'}
+
+### 3.1 小程序 / H5 转化看板
+
+{table_to_md(flow_section['flow_dashboard'], ['指标', '小程序', '全店', 'H5'], 12)}
+
+### 3.2 页面与商品浏览
+
+微页面 UV 排行：
+
+{table_to_md(flow_section['page_rank'], ['页面', 'UV'], 8)}
+
+商详页 UV 排行：
+
+{table_to_md(flow_section['goods_uv_rank'], ['商品', '页面UV'], 10)}
+
+商品加购排行：
+
+{table_to_md(flow_section['addcart_rank'], ['商品', '加购件数'], 8)}
+
+## 4. {words['current_change']}
 
 {chr(10).join(f'- {line}' for line in change_lines)}
 
-## 4. 商品经营判断
+## 5. 商品经营判断
 
 {table_to_md(product_judgement, ['商品/类目', current_amount_col, '订单数', '客户数', '当前角色', '当前问题', next_action_col], 10)}
 
-## 5. 客户经营池
+## 6. 客户经营池
 
 {table_to_md(customer_pool, ['经营池', '客户', words['current_behavior'], '判断', '下一步动作', '负责人'], 18)}
 
-## 6. 分销员排行与经营判断
+## 7. 分销员排行与经营判断
 
-### 6.1 分销员销售排行
+### 7.1 分销员销售排行
 
 {table_to_md(distributor_rank, ['排名', '分销员', current_amount_col, '有效订单数', '成交客户数', '客单价', '复购客户数', '复购率', '高客单客户数', '黑标客户数', '分层'], 20)}
 
-### 6.2 分销员{words['next']}动作
+### 7.2 分销员{words['next']}动作
 
 {table_to_md(distributor_actions, ['分销员', '分层', next_action_col], 20)}
 
-## 7. {words['current_review']}
+## 8. {words['current_review']}
 
 {table_to_md(action_review, [words['previous_action'], '是否完成', '结果', words['current_handle']], 10)}
 
-## 8. {words['next']}行动清单
+## 9. {words['next']}行动清单
 
 {table_to_md(action_plan, ['负责人', '动作', '对象', '截止时间', '验证指标'], 10)}
 
-## 9. {words['next']}要验证的问题
+## 10. {words['next']}要验证的问题
 
 {chr(10).join(f'- {question}' for question in questions)}
 
-## 10. 附录：数据口径
+## 11. 附录：数据口径
 
 - 分析区间：{date_range or week_label}
 - 数据来源：有赞自助取数 `来处订单商品明细_yz_open_id`
@@ -606,6 +764,7 @@ def build_summary_text(
 - 复购口径：{repurchase_note}
 - 分销员口径：当前按分销员昵称聚合；如分销员改名或重名，需要接入分销员 ID / 手机号
 - 原始数据文件：`{detail_path or ''}`
+- 流量数据文件：`{flow_section['flow_source']}`
 """
     context = {
         "metrics": metrics,
@@ -621,6 +780,7 @@ def build_summary_text(
         "questions": questions,
         "repurchase_note": repurchase_note,
         "detail_path": str(detail_path or ""),
+        "flow_section": flow_section,
         "words": words,
         "one_sentence": f"{words['current']}成交额 {format_money(metrics.get('累计实付', 0))}，有效订单 {int(metrics.get('有效订单数', 0) or 0)} 单，成交客户 {int(metrics.get('去重用户数', 0) or 0)} 人。{signal}；分销侧以 {top_dist_name} 最值得优先复盘。",
     }
@@ -704,31 +864,47 @@ def build_docx(
     doc.add_heading("2. 核心数据看板", level=1)
     add_dataframe_table(doc, context["dashboard"], ["指标", words["current"], "累计/对比"], 20)
 
-    doc.add_heading(f"3. {words['current_change']}", level=1)
+    flow_section = context.get("flow_section", {})
+    doc.add_heading("3. 流量与浏览转化", level=1)
+    if flow_section.get("flow_lines"):
+        add_bullets(doc, flow_section["flow_lines"])
+    else:
+        doc.add_paragraph("暂无流量浏览数据")
+    doc.add_heading("3.1 小程序 / H5 转化看板", level=2)
+    add_dataframe_table(doc, flow_section.get("flow_dashboard", pd.DataFrame()), ["指标", "小程序", "全店", "H5"], 12)
+    doc.add_heading("3.2 页面与商品浏览", level=2)
+    doc.add_paragraph("微页面 UV 排行")
+    add_dataframe_table(doc, flow_section.get("page_rank", pd.DataFrame()), ["页面", "UV"], 8)
+    doc.add_paragraph("商详页 UV 排行")
+    add_dataframe_table(doc, flow_section.get("goods_uv_rank", pd.DataFrame()), ["商品", "页面UV"], 10)
+    doc.add_paragraph("商品加购排行")
+    add_dataframe_table(doc, flow_section.get("addcart_rank", pd.DataFrame()), ["商品", "加购件数"], 8)
+
+    doc.add_heading(f"4. {words['current_change']}", level=1)
     add_bullets(doc, context["change_lines"])
 
-    doc.add_heading("4. 商品经营判断", level=1)
+    doc.add_heading("5. 商品经营判断", level=1)
     add_dataframe_table(doc, context["product_judgement"], ["商品/类目", current_amount_col, "订单数", "客户数", "当前角色", "当前问题", next_action_col], 10)
 
-    doc.add_heading("5. 客户经营池", level=1)
+    doc.add_heading("6. 客户经营池", level=1)
     add_dataframe_table(doc, context["customer_pool"], ["经营池", "客户", words["current_behavior"], "判断", "下一步动作", "负责人"], 18)
 
-    doc.add_heading("6. 分销员排行与经营判断", level=1)
-    doc.add_heading("6.1 分销员销售排行", level=2)
+    doc.add_heading("7. 分销员排行与经营判断", level=1)
+    doc.add_heading("7.1 分销员销售排行", level=2)
     add_dataframe_table(doc, context["distributor_rank"], ["排名", "分销员", current_amount_col, "有效订单数", "成交客户数", "客单价", "复购客户数", "复购率", "高客单客户数", "黑标客户数", "分层"], 20)
-    doc.add_heading(f"6.2 分销员{words['next']}动作", level=2)
+    doc.add_heading(f"7.2 分销员{words['next']}动作", level=2)
     add_dataframe_table(doc, context["distributor_actions"], ["分销员", "分层", next_action_col], 20)
 
-    doc.add_heading(f"7. {words['current_review']}", level=1)
+    doc.add_heading(f"8. {words['current_review']}", level=1)
     add_dataframe_table(doc, context["action_review"], [words["previous_action"], "是否完成", "结果", words["current_handle"]], 10)
 
-    doc.add_heading(f"8. {words['next']}行动清单", level=1)
+    doc.add_heading(f"9. {words['next']}行动清单", level=1)
     add_dataframe_table(doc, context["action_plan"], ["负责人", "动作", "对象", "截止时间", "验证指标"], 10)
 
-    doc.add_heading(f"9. {words['next']}要验证的问题", level=1)
+    doc.add_heading(f"10. {words['next']}要验证的问题", level=1)
     add_bullets(doc, context["questions"])
 
-    doc.add_heading("10. 附录：数据口径", level=1)
+    doc.add_heading("11. 附录：数据口径", level=1)
     metrics = context["metrics"]
     appendix = [
         f"分析区间：{date_range or week_label}",
@@ -743,6 +919,7 @@ def build_docx(
         f"复购口径：{context['repurchase_note']}",
         "分销员口径：当前按分销员昵称聚合；如分销员改名或重名，需要接入分销员 ID / 手机号",
         f"原始数据文件：{context['detail_path']}",
+        f"流量数据文件：{flow_section.get('flow_source', '')}",
     ]
     add_bullets(doc, appendix)
 
