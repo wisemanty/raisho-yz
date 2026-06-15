@@ -156,15 +156,16 @@ def classify_user(row: pd.Series, profile: dict[str, object]) -> tuple[str, str,
     has_sake = "玉乃光" in categories
     has_imabari = "今治" in categories
     has_distributor = bool(clean_text(row["分销员归属"]))
-    is_repeat = row["有效订单数"] >= 2
+    purchase_sessions = int(row.get("购买会话数", row["有效订单数"]) or 0)
+    is_repeat = purchase_sessions >= 2
     aov_pct = float(row.get("_客单价百分位", 0.5) or 0.5)
     paid_pct = float(row.get("_累计实付百分位", 0.5) or 0.5)
     order_pct = float(row.get("_订单数百分位", 0.5) or 0.5)
     high_money_signal = aov_pct >= 0.75 or paid_pct >= 0.80
 
-    if row["有效订单数"] >= 2:
+    if is_repeat:
         tags.append("复购用户")
-        reasons.append(f"有效订单数{row['有效订单数']}，已出现复购")
+        reasons.append(f"购买会话数{purchase_sessions}，已出现跨日复购")
         rules.append("repeat_order")
     else:
         tags.append("尝鲜用户")
